@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use koharu_rasterizer::{
     PreparedGlyph, PreparedGlyphRun, PreparedResource, PreparedScene, PreparedSceneCommand,
-    ResourceId,
+    PathElement, PreparedPath, ResourceId,
 };
 use vello::kurbo::Affine;
 
@@ -30,6 +30,7 @@ pub(crate) struct TextNodeDescriptor {
     pub(crate) font_families: Vec<String>,
     pub(crate) font_weight: Option<u16>,
     pub(crate) font_style: Option<FontStyle>,
+    pub(crate) underline: bool,
     pub(crate) font_size: Option<f32>,
     pub(crate) minimum_font_size: f32,
     pub(crate) auto_fit: bool,
@@ -74,6 +75,7 @@ pub(crate) struct TextRenderOptions {
     pub padding: f32,
     pub baseline_shift: f32,
     pub stroke: Option<StrokeOptions>,
+    pub underline: bool,
 }
 
 impl Default for TextRenderOptions {
@@ -84,6 +86,7 @@ impl Default for TextRenderOptions {
             padding: 0.0,
             baseline_shift: 0.0,
             stroke: None,
+            underline: false,
         }
     }
 }
@@ -266,6 +269,7 @@ impl TextRenderer {
         let mut options = TextRenderOptions {
             color,
             stroke: None,
+            underline: descriptor.underline,
             ..TextRenderOptions::default()
         };
         let mut scene = PreparedScene::default();
@@ -444,6 +448,46 @@ fn draw_layout(
                     glyphs,
                 }));
             start = end;
+        }
+
+        if options.underline && writing_mode == WritingMode::Horizontal && !line.glyphs.is_empty() {
+            let start_x = line
+                .glyphs
+                .first()
+                .map_or(0.0, |glyph| glyph.x_offset);
+            let width = line
+                .glyphs
+                .iter()
+                .map(|glyph| glyph.x_advance)
+                .sum::<f32>();
+            let thickness = (layout.font_size * 0.06).max(1.0);
+            let y = line.baseline.1 + (layout.font_size * 0.12).max(1.0);
+            scene.commands.push(PreparedSceneCommand::FillPath(
+                PreparedPath {
+                    fill: koharu_rasterizer::FillRule::NonZero,
+                    transform: transform.as_coeffs(),
+                    color: paint.color,
+                    elements: vec![
+                        PathElement::MoveTo([
+                            f64::from(options.padding + baseline_x + start_x),
+                            f64::from(options.padding + y),
+                        ]),
+                        PathElement::LineTo([
+                            f64::from(options.padding + baseline_x + start_x + width),
+                            f64::from(options.padding + y),
+                        ]),
+                        PathElement::LineTo([
+                            f64::from(options.padding + baseline_x + start_x + width),
+                            f64::from(options.padding + y + thickness),
+                        ]),
+                        PathElement::LineTo([
+                            f64::from(options.padding + baseline_x + start_x),
+                            f64::from(options.padding + y + thickness),
+                        ]),
+                        PathElement::Close,
+                    ],
+                },
+            ));
         }
     }
 }

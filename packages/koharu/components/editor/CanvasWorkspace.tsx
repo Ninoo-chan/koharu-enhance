@@ -111,6 +111,7 @@ export function CanvasWorkspace() {
   const brush = useKoharuStore((state) => state.brush)
   const selected = useKoharuStore((state) => state.selectedLayers)
   const selectLayers = useKoharuStore((state) => state.selectLayers)
+  const requestTranslationFocus = useKoharuStore((state) => state.requestTranslationFocus)
   const setTool = useKoharuStore((state) => state.setTool)
   const setBrush = useKoharuStore((state) => state.setBrush)
   const requestCanvasFit = useKoharuStore((state) => state.requestCanvasFit)
@@ -479,6 +480,7 @@ export function CanvasWorkspace() {
       )
         .then((result) => {
           selectLayers([result.layer])
+          requestTranslationFocus(result.layer)
           return refresh(projectKey, pagesKey, pageKey)
         })
         .catch(() => undefined)

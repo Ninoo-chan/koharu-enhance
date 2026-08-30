@@ -1,0 +1,2024 @@
+<!doctype html>
+<html lang="es">
+ <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Editor de Imágenes con Cajas de Texto</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+        tailwind.config = {
+            darkMode: 'class'
+        }
+    </script>
+  <style>
+        body {
+            box-sizing: border-box;
+        }
+        
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        
+        .thumbnail {
+            transition: all 0.3s ease;
+        }
+        .thumbnail:hover {
+            transform: scale(1.05);
+        }
+        .thumbnail.active {
+            border: 3px solid #3b82f6;
+        }
+        .thumbnail.loading {
+            opacity: 0.5;
+            background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+            background-size: 200% 100%;
+            animation: loading 1.5s infinite;
+        }
+
+        @keyframes loading {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        .zoom-container {
+            overflow: hidden;
+            position: relative;
+            cursor: grab;
+        }
+        .zoom-container:active {
+            cursor: grabbing;
+        }
+
+        .main-image {
+            transition: transform 0.3s ease;
+            max-width: none;
+            height: auto;
+            position: relative;
+        }
+
+        .text-box {
+            position: absolute;
+            border: 2px dashed #3b82f6;
+            background: rgba(59, 130, 246, 0.1);
+            cursor: move;
+            min-width: 50px;
+            min-height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: Arial, sans-serif;
+            font-size: 16px;
+            color: #000;
+            padding: 8px;
+            box-sizing: border-box;
+            overflow: hidden;
+            word-wrap: break-word;
+            white-space: normal;
+            text-align: center;
+            line-height: 1.2;
+        }
+
+        .text-box.selected {
+            border-color: #ef4444;
+            background: rgba(239, 68, 68, 0.1);
+        }
+
+        .text-box:hover {
+            border-color: #10b981;
+            background: rgba(16, 185, 129, 0.1);
+        }
+
+        .resize-handle {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            background: #3b82f6;
+            border: 1px solid white;
+            border-radius: 50%;
+        }
+
+        .resize-handle.nw { top: -4px; left: -4px; cursor: nw-resize; }
+        .resize-handle.ne { top: -4px; right: -4px; cursor: ne-resize; }
+        .resize-handle.sw { bottom: -4px; left: -4px; cursor: sw-resize; }
+        .resize-handle.se { bottom: -4px; right: -4px; cursor: se-resize; }
+
+        input[type="color"] {
+            width: 40px;
+            height: 30px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            height: 6px;
+            border-radius: 3px;
+            background: #d1d5db;
+            outline: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #3b82f6;
+            cursor: pointer;
+        }
+
+        input[type="range"]::-moz-range-thumb {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #3b82f6;
+            cursor: pointer;
+            border: none;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: #e5e7eb;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #3b82f6, #1d4ed8);
+            border-radius: 2px;
+            transition: width 0.3s ease;
+        }
+
+        .font-preview {
+            padding: 8px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            margin: 2px 0;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .font-preview:hover {
+            background: #f3f4f6;
+            border-color: #3b82f6;
+        }
+
+        .font-preview.selected {
+            background: #dbeafe;
+            border-color: #3b82f6;
+        }
+
+        @font-face {
+            font-family: 'CustomFont';
+            src: url('') format('truetype');
+        }
+    </style>
+  <style>@view-transition { navigation: auto; }</style>
+  <script src="/_sdk/data_sdk.js" type="text/javascript"></script>
+  <script src="/_sdk/element_sdk.js" type="text/javascript"></script>
+ </head>
+ <body class="bg-gray-100 dark:bg-gray-900 h-full flex flex-col transition-colors"><!-- Barra superior -->
+  <div class="bg-white dark:bg-gray-800 shadow-md px-6 py-3 border-b dark:border-gray-700 transition-colors">
+   <div class="flex items-center justify-between">
+    <div class="flex items-center space-x-4">
+     <h1 class="text-xl font-bold text-gray-800 dark:text-gray-200">Editor de Imágenes con Cajas de Texto</h1><button id="themeToggle" class="p-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 rounded-lg transition-colors"> <span id="themeIcon" class="text-lg">🌙</span> </button>
+    </div>
+    <div class="flex items-center space-x-4"><span class="text-sm text-gray-600 dark:text-gray-300" id="projectStatus">Sin proyecto</span>
+     <div class="w-2 h-2 bg-gray-400 rounded-full" id="projectIndicator"></div>
+    </div>
+   </div>
+  </div><!-- Contenedor principal tríptico -->
+  <div class="flex-1 flex overflow-hidden"><!-- Panel izquierdo -->
+   <div class="w-80 flex-shrink-0 bg-white dark:bg-gray-800 border-r dark:border-gray-700 flex flex-col transition-colors overflow-hidden"><!-- Barra del panel izquierdo -->
+    <div class="p-4 border-b bg-gray-50 dark:bg-gray-700 dark:border-gray-600 transition-colors">
+     <div class="flex items-center justify-between mb-3">
+      <div class="flex items-center space-x-2"><span class="text-sm font-medium text-gray-700 dark:text-gray-200"> <span id="imageCount">0</span> imágenes </span> <span class="text-xs text-gray-500 dark:text-gray-400" id="loadingStatus"></span>
+      </div>
+     </div><!-- Barra de progreso -->
+     <div id="progressContainer" class="mb-3 hidden">
+      <div class="progress-bar">
+       <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+      </div>
+      <div class="text-xs text-gray-500 dark:text-gray-400 mt-1" id="progressText">
+       Cargando...
+      </div>
+     </div>
+     <div class="flex items-center space-x-3"><input type="range" id="thumbnailSize" min="60" max="120" value="80" class="flex-1 h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer"> <span class="text-xs text-gray-500 dark:text-gray-400 w-8" id="sizeValue">80px</span>
+     </div>
+    </div><!-- Lista de miniaturas -->
+    <div class="flex-1 p-4 overflow-y-auto min-h-0">
+     <div class="grid gap-3" id="thumbnailGrid"><!-- Miniaturas generadas dinámicamente -->
+     </div>
+    </div>
+   </div><!-- Panel central -->
+   <div class="flex-1 bg-gray-50 dark:bg-gray-900 flex flex-col transition-colors"><!-- Barra del panel central -->
+    <div class="p-4 border-b bg-white dark:bg-gray-800 dark:border-gray-700 transition-colors">
+     <div class="flex items-center justify-center space-x-6"><button id="zoomOut" class="p-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 rounded-lg transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed" disabled> <span class="text-lg">🔍➖</span> </button> <button id="zoomDefault" class="p-2 bg-blue-100 hover:bg-blue-200 dark:bg-blue-800 dark:hover:bg-blue-700 rounded-lg transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed" disabled> <span class="text-lg">🔍🏠</span> </button> <button id="zoomIn" class="p-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 rounded-lg transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed" disabled> <span class="text-lg">🔍➕</span> </button>
+      <div class="text-sm text-gray-600 dark:text-gray-300 ml-4">
+       Zoom: <span id="zoomLevel">100%</span>
+      </div>
+     </div>
+    </div><!-- Espacio de imagen principal -->
+    <div class="flex-1 p-6 flex items-center justify-center min-h-0">
+     <div class="zoom-container w-full h-full flex items-center justify-center bg-white dark:bg-gray-800 rounded-lg shadow-inner relative overflow-hidden" id="imageContainer"><img id="mainImage" src="" alt="Imagen principal" class="main-image max-w-full max-h-full object-contain" style="transform: scale(1);">
+      <div id="textBoxContainer" class="absolute top-0 left-0 w-full h-full pointer-events-none"><!-- Cajas de texto aquí -->
+      </div>
+     </div>
+    </div>
+   </div><!-- Panel derecho -->
+   <div class="w-80 flex-shrink-0 bg-white dark:bg-gray-800 border-l dark:border-gray-700 flex flex-col transition-colors overflow-hidden"><!-- Barra del panel derecho -->
+    <div class="p-4 border-b bg-gray-50 dark:bg-gray-700 dark:border-gray-600 transition-colors">
+     <div class="flex items-center justify-between">
+      <div class="flex space-x-2"><button id="exportImage" class="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded transition-colors text-sm font-medium disabled:bg-gray-400 disabled:cursor-not-allowed" title="Exportar imagen actual" disabled> 📸 Exportar </button> <button id="exportAll" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors text-sm font-medium disabled:bg-gray-400 disabled:cursor-not-allowed" title="Exportar todas las imágenes" disabled> 📦 Todo </button>
+      </div>
+     </div>
+    </div><!-- Contenido dinámico -->
+    <div class="flex-1 p-4 overflow-y-auto min-h-0"><!-- Estado sin proyecto -->
+     <div id="noProjectState" class="h-full flex flex-col items-center justify-center space-y-4">
+      <div class="text-gray-500 dark:text-gray-400 text-center mb-6">
+       <div class="text-4xl mb-2">
+        📝
+       </div>
+       <p class="text-sm">No hay imágenes cargadas</p>
+       <p class="text-xs mt-2 opacity-75">Carga imágenes para empezar</p>
+      </div><button id="loadImages" class="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-medium"> 📁 Cargar Imágenes </button>
+     </div><!-- Estado con proyecto -->
+     <div id="withProjectState" class="space-y-4 hidden"><!-- Selector de fuente por defecto -->
+      <div class="space-y-3 border-b pb-4">
+       <div class="flex items-center justify-between">
+        <h3 class="text-sm font-medium text-gray-700 dark:text-gray-200">Fuente por Defecto</h3><button id="loadCustomFont" class="px-2 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded text-xs font-medium transition-colors"> 📁 Cargar </button>
+       </div>
+       <div class="space-y-2 max-h-32 overflow-y-auto" id="fontSelector"><!-- Fuentes disponibles -->
+       </div>
+      </div><!-- Botón CSV (solo visible con proyecto) -->
+      <div class="space-y-3 border-b pb-4"><button id="loadCSV" class="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors font-medium"> 📊 Cargar CSV con Textos </button>
+       <p class="text-xs text-gray-500 dark:text-gray-400 text-center">CSV debe tener: filename, startx, starty, endx, endy, text</p>
+       <p class="text-xs text-gray-400 dark:text-gray-500 text-center">filename con extensión, textos entre comillas</p>
+      </div><!-- Controles de caja de texto -->
+      <div class="space-y-3">
+       <div class="flex items-center justify-between">
+        <h3 class="text-sm font-medium text-gray-700 dark:text-gray-200">Cajas de Texto</h3><button id="addTextBox" class="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-medium transition-colors"> ➕ Agregar </button>
+       </div><!-- Texto -->
+       <div><label class="block text-xs text-gray-600 dark:text-gray-300 mb-1">Texto</label> <textarea id="textContent" class="w-full p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm resize-none" rows="2" placeholder="Selecciona una caja de texto..." disabled></textarea>
+       </div><!-- Fuente y tamaño -->
+       <div class="grid grid-cols-2 gap-2">
+        <div><label class="block text-xs text-gray-600 dark:text-gray-300 mb-1">Fuente</label> <select id="fontFamily" class="w-full p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-xs" disabled> <!-- Opciones generadas dinámicamente --> </select>
+        </div>
+        <div><label class="block text-xs text-gray-600 dark:text-gray-300 mb-1">Tamaño</label> <input type="number" id="fontSize" min="8" max="200" value="16" class="w-full p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-xs" disabled>
+        </div>
+       </div><!-- Estilo de texto -->
+       <div><label class="block text-xs text-gray-600 dark:text-gray-300 mb-2">Estilo</label>
+        <div class="flex space-x-2"><button id="boldToggle" class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs font-bold hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors" disabled>B</button> <button id="italicToggle" class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs italic hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors" disabled>I</button> <button id="underlineToggle" class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs underline hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors" disabled>U</button>
+        </div>
+       </div><!-- Color del texto -->
+       <div class="grid grid-cols-2 gap-2">
+        <div><label class="block text-xs text-gray-600 dark:text-gray-300 mb-1">Color</label>
+         <div class="flex items-center space-x-2"><input type="color" id="textColor" value="#000000" class="border border-gray-300 dark:border-gray-600 rounded" disabled> <span class="text-xs text-gray-500 dark:text-gray-400" id="textColorValue">#000000</span>
+         </div>
+        </div>
+        <div><label class="block text-xs text-gray-600 dark:text-gray-300 mb-1">Opacidad</label> <input type="range" id="textOpacity" min="0" max="100" value="100" class="w-full" disabled>
+         <div class="text-xs text-gray-500 dark:text-gray-400 text-center" id="opacityValue">
+          100%
+         </div>
+        </div>
+       </div><!-- Posición y tamaño -->
+       <div><label class="block text-xs text-gray-600 dark:text-gray-300 mb-2">Posición y Tamaño</label>
+        <div class="grid grid-cols-2 gap-2 text-xs">
+         <div><label class="block text-gray-500 dark:text-gray-400">X</label> <input type="number" id="posX" min="0" value="0" class="w-full p-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" disabled>
+         </div>
+         <div><label class="block text-gray-500 dark:text-gray-400">Y</label> <input type="number" id="posY" min="0" value="0" class="w-full p-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" disabled>
+         </div>
+         <div><label class="block text-gray-500 dark:text-gray-400">Ancho</label> <input type="number" id="boxWidth" min="50" value="200" class="w-full p-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" disabled>
+         </div>
+         <div><label class="block text-gray-500 dark:text-gray-400">Alto</label> <input type="number" id="boxHeight" min="30" value="50" class="w-full p-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" disabled>
+         </div>
+        </div>
+       </div><!-- Acciones de caja -->
+       <div class="flex space-x-2"><button id="deleteTextBox" class="flex-1 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded text-xs font-medium transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed" disabled> 🗑️ Eliminar </button> <button id="duplicateTextBox" class="flex-1 px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded text-xs font-medium transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed" disabled> 📋 Duplicar </button>
+       </div>
+      </div><!-- Lista de cajas -->
+      <div class="border-t pt-4">
+       <h3 class="text-sm font-medium text-gray-700 dark:text-gray-200 mb-2">Cajas de Texto</h3>
+       <div class="space-y-1 max-h-40 overflow-y-auto" id="textBoxList"><!-- Cajas generadas dinámicamente -->
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+  <script>
+        // Variables globales
+        let images = [];
+        let textBoxes = [];
+        let selectedTextBoxId = null;
+        let currentImageIndex = 0;
+        let currentZoom = 1;
+        let thumbnailSize = 80;
+        let hasProject = false;
+        let defaultFont = 'Arial';
+        let availableFonts = [];
+        let customFonts = [];
+
+        // Variables para arrastre
+        let isDragging = false;
+        let isResizing = false;
+        let dragStartX = 0;
+        let dragStartY = 0;
+        let dragOffsetX = 0;
+        let dragOffsetY = 0;
+        let resizeHandle = null;
+
+        // Variables para carga optimizada
+        let loadingQueue = [];
+        let isLoading = false;
+        let loadedCount = 0;
+
+        // Fuentes del sistema disponibles
+        const systemFonts = [
+            'Arial', 'Helvetica', 'Times New Roman', 'Georgia', 'Verdana', 
+            'Courier New', 'Impact', 'Comic Sans MS', 'Trebuchet MS', 
+            'Arial Black', 'Palatino', 'Garamond', 'Bookman', 'Tahoma'
+        ];
+
+        // Inicializar fuentes disponibles
+        function initializeFonts() {
+            availableFonts = [...systemFonts];
+            updateFontSelector();
+            updateFontDropdown();
+        }
+
+        // Actualizar selector de fuentes
+        function updateFontSelector() {
+            const selector = document.getElementById('fontSelector');
+            selector.innerHTML = '';
+
+            availableFonts.forEach(font => {
+                const fontDiv = document.createElement('div');
+                fontDiv.className = `font-preview text-sm ${font === defaultFont ? 'selected' : ''}`;
+                fontDiv.style.fontFamily = font;
+                fontDiv.textContent = `${font} - Ejemplo de texto`;
+                fontDiv.addEventListener('click', () => {
+                    defaultFont = font;
+                    updateFontSelector();
+                });
+                selector.appendChild(fontDiv);
+            });
+        }
+
+        // Actualizar dropdown de fuentes
+        function updateFontDropdown() {
+            const dropdown = document.getElementById('fontFamily');
+            dropdown.innerHTML = '';
+
+            availableFonts.forEach(font => {
+                const option = document.createElement('option');
+                option.value = font;
+                option.textContent = font;
+                option.style.fontFamily = font;
+                dropdown.appendChild(option);
+            });
+        }
+
+        // Cargar archivo CSV
+        async function loadCSV() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.csv';
+            input.style.display = 'none';
+            document.body.appendChild(input);
+
+            input.addEventListener('change', async (e) => {
+                if (e.target.files.length > 0) {
+                    await processCSV(e.target.files[0]);
+                }
+                document.body.removeChild(input);
+            });
+
+            input.click();
+        }
+
+        // Procesar archivo CSV
+        async function processCSV(csvFile) {
+            try {
+                const text = await csvFile.text();
+                const lines = text.split('\n').filter(line => line.trim());
+                
+                if (lines.length < 2) {
+                    alert('❌ El archivo CSV debe tener al menos una fila de encabezados y una fila de datos');
+                    return;
+                }
+
+                // Parsear CSV con manejo de comillas
+                const data = parseCSVWithQuotes(text);
+
+                if (data.length === 0) {
+                    alert('❌ No se encontraron datos válidos en el CSV');
+                    return;
+                }
+
+                // Verificar que tiene las columnas necesarias
+                const requiredColumns = ['filename', 'startx', 'starty', 'endx', 'endy', 'text'];
+                const headers = Object.keys(data[0]).map(h => h.toLowerCase());
+                const missingColumns = requiredColumns.filter(col => !headers.includes(col));
+                
+                if (missingColumns.length > 0) {
+                    alert(`❌ El CSV debe tener las columnas: ${requiredColumns.join(', ')}\nFaltan: ${missingColumns.join(', ')}`);
+                    return;
+                }
+
+                // Aplicar datos del CSV automáticamente
+                await applyCSVDataAutomatic(data);
+
+                alert(`✅ CSV cargado exitosamente: ${data.length} cajas de texto creadas automáticamente`);
+
+            } catch (error) {
+                console.error('Error procesando CSV:', error);
+                alert('❌ Error al procesar el CSV: ' + error.message);
+            }
+        }
+
+        // Parsear CSV con manejo correcto de comillas
+        function parseCSVWithQuotes(csvText) {
+            const lines = csvText.split('\n').filter(line => line.trim());
+            if (lines.length < 2) return [];
+
+            const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase());
+            const data = [];
+
+            for (let i = 1; i < lines.length; i++) {
+                const values = parseCSVLine(lines[i]);
+                if (values.length === headers.length) {
+                    const row = {};
+                    headers.forEach((header, index) => {
+                        row[header] = values[index];
+                    });
+                    data.push(row);
+                }
+            }
+
+            return data;
+        }
+
+        // Parsear línea CSV con manejo de comillas
+        function parseCSVLine(line) {
+            const result = [];
+            let current = '';
+            let inQuotes = false;
+            
+            for (let i = 0; i < line.length; i++) {
+                const char = line[i];
+                
+                if (char === '"') {
+                    if (inQuotes && line[i + 1] === '"') {
+                        // Comilla doble escapada
+                        current += '"';
+                        i++; // Saltar la siguiente comilla
+                    } else {
+                        // Cambiar estado de comillas
+                        inQuotes = !inQuotes;
+                    }
+                } else if (char === ',' && !inQuotes) {
+                    // Separador encontrado fuera de comillas
+                    result.push(current.trim());
+                    current = '';
+                } else {
+                    current += char;
+                }
+            }
+            
+            // Agregar el último campo
+            result.push(current.trim());
+            
+            return result;
+        }
+
+        // Aplicar datos del CSV automáticamente
+        async function applyCSVDataAutomatic(csvData) {
+            if (!hasProject || images.length === 0) {
+                alert('⚠️ Primero debes cargar las imágenes antes de aplicar el CSV');
+                return;
+            }
+
+            // Limpiar cajas de texto existentes
+            textBoxes = [];
+
+            let processedCount = 0;
+            let skippedCount = 0;
+
+            // Procesar cada fila del CSV
+            csvData.forEach((row) => {
+                // Buscar la imagen correspondiente por filename
+                const filename = row.filename;
+                if (!filename || !row.text) {
+                    skippedCount++;
+                    return;
+                }
+
+                // Buscar imagen que coincida con el filename (flexible con extensiones)
+                const targetImage = images.find(img => {
+                    // Obtener nombre base del CSV (sin extensión)
+                    const csvNameBase = filename.replace(/\.[^/.]+$/, '').toLowerCase();
+                    
+                    // Obtener nombre base de la imagen (sin extensión y sin _clean)
+                    const imgNameWithoutExt = img.name.replace(/\.[^/.]+$/, '');
+                    const imgNameBase = imgNameWithoutExt.replace(/_clean$/, '').toLowerCase();
+                    
+                    return imgNameBase === csvNameBase;
+                });
+
+                if (!targetImage) {
+                    console.warn(`No se encontró imagen para: ${filename}`);
+                    skippedCount++;
+                    return;
+                }
+
+                // Crear caja de texto con las coordenadas del CSV
+                const startX = parseInt(row.startx) || 0;
+                const startY = parseInt(row.starty) || 0;
+                const endX = parseInt(row.endx) || startX + 200;
+                const endY = parseInt(row.endy) || startY + 50;
+
+                const boxId = `csv_box_${Date.now()}_${Math.random()}`;
+                
+                const newBox = {
+                    id: boxId,
+                    imageName: targetImage.name,
+                    text: row.text, // Ya no necesitamos trim() porque parseCSVLine lo maneja
+                    x: startX,
+                    y: startY,
+                    width: Math.max(50, endX - startX),
+                    height: Math.max(30, endY - startY),
+                    fontFamily: defaultFont,
+                    fontSize: 16,
+                    fontWeight: 'normal',
+                    fontStyle: 'normal',
+                    textDecoration: 'none',
+                    color: '#000000',
+                    opacity: 1
+                };
+
+                textBoxes.push(newBox);
+                processedCount++;
+            });
+
+            // Actualizar interfaz
+            renderTextBoxes();
+            updateTextBoxList();
+            generateThumbnails();
+
+            console.log(`Procesadas: ${processedCount}, Omitidas: ${skippedCount}`);
+        }
+
+        // Crear cajas de texto desde una fila del CSV
+        function createTextBoxesFromRow(row, config, imageIndex) {
+            if (imageIndex >= images.length) return;
+
+            const targetImage = images[imageIndex];
+            let yOffset = config.startY || 50;
+
+            config.textColumns.forEach((column, index) => {
+                if (row[column] && row[column].trim()) {
+                    const boxId = `csv_box_${Date.now()}_${Math.random()}`;
+                    
+                    const newBox = {
+                        id: boxId,
+                        imageName: targetImage.name,
+                        text: row[column].trim(),
+                        x: config.startX || 50,
+                        y: yOffset + (index * (config.spacing || 60)),
+                        width: config.boxWidth || 300,
+                        height: config.boxHeight || 50,
+                        fontFamily: defaultFont,
+                        fontSize: config.fontSize || 16,
+                        fontWeight: 'normal',
+                        fontStyle: 'normal',
+                        textDecoration: 'none',
+                        color: config.textColor || '#000000',
+                        opacity: 1
+                    };
+
+                    textBoxes.push(newBox);
+                }
+            });
+        }
+
+        // Mostrar diálogo de configuración del CSV
+        function showCSVConfigDialog(headers, csvData) {
+            return new Promise((resolve) => {
+                // Crear modal
+                const modal = document.createElement('div');
+                modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+                modal.innerHTML = `
+                    <div class="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 max-h-96 overflow-y-auto">
+                        <h3 class="text-lg font-bold text-gray-800 dark:text-gray-200 mb-4">Configurar CSV</h3>
+                        
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                    Columnas de texto (selecciona las que quieres usar):
+                                </label>
+                                <div class="space-y-1 max-h-32 overflow-y-auto border rounded p-2">
+                                    ${headers.map(header => `
+                                        <label class="flex items-center">
+                                            <input type="checkbox" value="${header}" class="text-column-checkbox mr-2">
+                                            <span class="text-sm">${header}</span>
+                                        </label>
+                                    `).join('')}
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    Mapeo de imágenes:
+                                </label>
+                                <select id="imageMapping" class="w-full p-2 border rounded">
+                                    <option value="order">Por orden (fila 1 → imagen 1, etc.)</option>
+                                    <option value="filename">Por nombre de archivo</option>
+                                    <option value="all">Aplicar a todas las imágenes</option>
+                                </select>
+                            </div>
+
+                            <div id="imageColumnDiv" class="hidden">
+                                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    Columna con nombres de archivo:
+                                </label>
+                                <select id="imageColumn" class="w-full p-2 border rounded">
+                                    ${headers.map(header => `<option value="${header}">${header}</option>`).join('')}
+                                </select>
+                            </div>
+
+                            <div class="grid grid-cols-2 gap-2">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Posición X:</label>
+                                    <input type="number" id="startX" value="50" class="w-full p-2 border rounded">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Posición Y:</label>
+                                    <input type="number" id="startY" value="50" class="w-full p-2 border rounded">
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-2 gap-2">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Ancho caja:</label>
+                                    <input type="number" id="boxWidth" value="300" class="w-full p-2 border rounded">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Alto caja:</label>
+                                    <input type="number" id="boxHeight" value="50" class="w-full p-2 border rounded">
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-2 gap-2">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Tamaño fuente:</label>
+                                    <input type="number" id="fontSize" value="16" class="w-full p-2 border rounded">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Espaciado:</label>
+                                    <input type="number" id="spacing" value="60" class="w-full p-2 border rounded">
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Color texto:</label>
+                                <input type="color" id="textColor" value="#000000" class="w-full p-1 border rounded">
+                            </div>
+
+                            <div>
+                                <label class="flex items-center">
+                                    <input type="checkbox" id="clearExisting" class="mr-2">
+                                    <span class="text-sm">Limpiar cajas de texto existentes</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="flex space-x-3 mt-6">
+                            <button id="csvCancel" class="flex-1 px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded">
+                                Cancelar
+                            </button>
+                            <button id="csvApply" class="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded">
+                                Aplicar
+                            </button>
+                        </div>
+                    </div>
+                `;
+
+                document.body.appendChild(modal);
+
+                // Manejar cambio de mapeo de imágenes
+                const imageMappingSelect = modal.querySelector('#imageMapping');
+                const imageColumnDiv = modal.querySelector('#imageColumnDiv');
+                
+                imageMappingSelect.addEventListener('change', (e) => {
+                    if (e.target.value === 'filename') {
+                        imageColumnDiv.classList.remove('hidden');
+                    } else {
+                        imageColumnDiv.classList.add('hidden');
+                    }
+                });
+
+                // Botón cancelar
+                modal.querySelector('#csvCancel').addEventListener('click', () => {
+                    document.body.removeChild(modal);
+                    resolve(null);
+                });
+
+                // Botón aplicar
+                modal.querySelector('#csvApply').addEventListener('click', () => {
+                    const selectedColumns = Array.from(modal.querySelectorAll('.text-column-checkbox:checked'))
+                        .map(cb => cb.value);
+                    
+                    if (selectedColumns.length === 0) {
+                        alert('⚠️ Debes seleccionar al menos una columna de texto');
+                        return;
+                    }
+
+                    const config = {
+                        textColumns: selectedColumns,
+                        imageMapping: modal.querySelector('#imageMapping').value,
+                        imageColumn: modal.querySelector('#imageColumn').value,
+                        startX: parseInt(modal.querySelector('#startX').value),
+                        startY: parseInt(modal.querySelector('#startY').value),
+                        boxWidth: parseInt(modal.querySelector('#boxWidth').value),
+                        boxHeight: parseInt(modal.querySelector('#boxHeight').value),
+                        fontSize: parseInt(modal.querySelector('#fontSize').value),
+                        spacing: parseInt(modal.querySelector('#spacing').value),
+                        textColor: modal.querySelector('#textColor').value,
+                        clearExisting: modal.querySelector('#clearExisting').checked
+                    };
+
+                    document.body.removeChild(modal);
+                    resolve(config);
+                });
+            });
+        }
+
+        // Cargar fuente personalizada
+        async function loadCustomFont() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.ttf,.otf,.woff,.woff2';
+            input.style.display = 'none';
+            document.body.appendChild(input);
+
+            input.addEventListener('change', async (e) => {
+                if (e.target.files.length > 0) {
+                    await processCustomFont(e.target.files[0]);
+                }
+                document.body.removeChild(input);
+            });
+
+            input.click();
+        }
+
+        // Procesar fuente personalizada
+        async function processCustomFont(fontFile) {
+            try {
+                const fontName = `CustomFont_${Date.now()}`;
+                const fontUrl = URL.createObjectURL(fontFile);
+                
+                // Crear @font-face dinámicamente
+                const style = document.createElement('style');
+                style.textContent = `
+                    @font-face {
+                        font-family: '${fontName}';
+                        src: url('${fontUrl}') format('truetype');
+                    }
+                `;
+                document.head.appendChild(style);
+
+                // Esperar a que la fuente se cargue
+                await document.fonts.load(`16px "${fontName}"`);
+
+                // Agregar a la lista de fuentes disponibles
+                availableFonts.push(fontName);
+                customFonts.push({ name: fontName, url: fontUrl, file: fontFile });
+
+                // Actualizar selectores
+                updateFontSelector();
+                updateFontDropdown();
+
+                // Establecer como fuente por defecto
+                defaultFont = fontName;
+                updateFontSelector();
+
+                alert(`✅ Fuente "${fontFile.name}" cargada exitosamente`);
+
+            } catch (error) {
+                console.error('Error cargando fuente:', error);
+                alert('❌ Error al cargar la fuente: ' + error.message);
+            }
+        }
+
+        // Actualizar estado de botones
+        function updateButtonStates() {
+            const projectButtons = [
+                'zoomOut', 'zoomDefault', 'zoomIn', 'exportImage', 'exportAll', 'addTextBox'
+            ];
+            
+            projectButtons.forEach(buttonId => {
+                const button = document.getElementById(buttonId);
+                if (button) {
+                    button.disabled = !hasProject;
+                }
+            });
+
+            // Controles de texto
+            const textControls = [
+                'textContent', 'fontFamily', 'fontSize', 'boldToggle', 'italicToggle', 
+                'underlineToggle', 'textColor', 'textOpacity', 'posX', 'posY', 
+                'boxWidth', 'boxHeight', 'deleteTextBox', 'duplicateTextBox'
+            ];
+
+            textControls.forEach(controlId => {
+                const control = document.getElementById(controlId);
+                if (control) {
+                    control.disabled = !selectedTextBoxId;
+                }
+            });
+
+            // Actualizar indicador de estado
+            const statusElement = document.getElementById('projectStatus');
+            const indicatorElement = document.getElementById('projectIndicator');
+            
+            if (hasProject) {
+                statusElement.textContent = 'Proyecto cargado';
+                indicatorElement.className = 'w-2 h-2 bg-green-400 rounded-full';
+            } else {
+                statusElement.textContent = 'Sin proyecto';
+                indicatorElement.className = 'w-2 h-2 bg-gray-400 rounded-full';
+            }
+        }
+
+        // Actualizar interfaz
+        function updateUI() {
+            const noProjectState = document.getElementById('noProjectState');
+            const withProjectState = document.getElementById('withProjectState');
+            
+            if (hasProject) {
+                noProjectState.classList.add('hidden');
+                withProjectState.classList.remove('hidden');
+            } else {
+                noProjectState.classList.remove('hidden');
+                withProjectState.classList.add('hidden');
+            }
+            
+            updateButtonStates();
+        }
+
+        // Mostrar progreso de carga
+        function showProgress() {
+            const container = document.getElementById('progressContainer');
+            container.classList.remove('hidden');
+        }
+
+        // Ocultar progreso de carga
+        function hideProgress() {
+            const container = document.getElementById('progressContainer');
+            container.classList.add('hidden');
+        }
+
+        // Actualizar progreso
+        function updateProgress(loaded, total, currentFile = '') {
+            const progressFill = document.getElementById('progressFill');
+            const progressText = document.getElementById('progressText');
+            const loadingStatus = document.getElementById('loadingStatus');
+            
+            const percentage = Math.round((loaded / total) * 100);
+            progressFill.style.width = `${percentage}%`;
+            progressText.textContent = `${loaded}/${total} imágenes cargadas`;
+            
+            if (currentFile) {
+                loadingStatus.textContent = `Cargando: ${currentFile}`;
+            } else {
+                loadingStatus.textContent = '';
+            }
+        }
+
+        // Cargar imágenes
+        async function loadImages() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.multiple = true;
+            input.accept = 'image/*';
+            input.style.display = 'none';
+            document.body.appendChild(input);
+
+            input.addEventListener('change', async (e) => {
+                if (e.target.files.length > 0) {
+                    await processImagesOptimized(Array.from(e.target.files));
+                }
+                document.body.removeChild(input);
+            });
+
+            input.click();
+        }
+
+        // Procesar imágenes de forma optimizada
+        async function processImagesOptimized(imageFiles) {
+            try {
+                // Resetear estado
+                images = [];
+                textBoxes = [];
+                loadingQueue = [];
+                loadedCount = 0;
+                isLoading = true;
+
+                // Ordenar archivos por nombre
+                imageFiles.sort((a, b) => a.name.localeCompare(b.name));
+
+                // Mostrar progreso
+                showProgress();
+                updateProgress(0, imageFiles.length);
+
+                // Crear placeholders inmediatamente
+                images = imageFiles.map(file => ({
+                    name: file.name,
+                    file: file,
+                    url: null,
+                    thumbnailUrl: null,
+                    width: 0,
+                    height: 0,
+                    loaded: false
+                }));
+
+                hasProject = true;
+                currentImageIndex = 0;
+
+                // Actualizar interfaz inmediatamente
+                updateUI();
+                generateThumbnailPlaceholders();
+
+                // Cargar imágenes de forma asíncrona
+                await loadImagesInBatches(imageFiles);
+
+                // Finalizar carga
+                isLoading = false;
+                hideProgress();
+                document.getElementById('loadingStatus').textContent = '';
+
+                // Seleccionar primera imagen si está cargada
+                if (images[0] && images[0].loaded) {
+                    selectImage(0);
+                }
+
+                // Preguntar automáticamente si quiere cargar CSV
+                setTimeout(() => {
+                    if (confirm('🎯 ¿Quieres cargar un archivo CSV para aplicar textos automáticamente a las imágenes?')) {
+                        loadCSV();
+                    }
+                }, 500);
+
+                alert(`✅ ${images.length} imágenes cargadas exitosamente`);
+
+            } catch (error) {
+                console.error('Error cargando imágenes:', error);
+                alert('❌ Error al cargar las imágenes: ' + error.message);
+                isLoading = false;
+                hideProgress();
+            }
+        }
+
+        // Cargar imágenes en lotes
+        async function loadImagesInBatches(imageFiles) {
+            const batchSize = 3; // Cargar 3 imágenes a la vez
+            
+            for (let i = 0; i < imageFiles.length; i += batchSize) {
+                const batch = imageFiles.slice(i, i + batchSize);
+                const promises = batch.map((file, index) => 
+                    processImageOptimized(file, i + index)
+                );
+                
+                await Promise.all(promises);
+                
+                // Pequeña pausa para no bloquear la UI
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+        }
+
+        // Procesar imagen individual optimizada
+        function processImageOptimized(file, index) {
+            return new Promise((resolve, reject) => {
+                updateProgress(loadedCount, images.length, file.name);
+                
+                const img = new Image();
+                img.onload = () => {
+                    try {
+                        // Crear canvas para miniatura
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+                        
+                        // Miniatura cuadrada
+                        const size = Math.min(img.width, img.height);
+                        const offsetX = (img.width - size) / 2;
+                        const offsetY = (img.height - size) / 2;
+                        
+                        canvas.width = 64;
+                        canvas.height = 64;
+                        
+                        ctx.imageSmoothingEnabled = true;
+                        ctx.imageSmoothingQuality = 'high';
+                        ctx.drawImage(img, offsetX, offsetY, size, size, 0, 0, 64, 64);
+                        
+                        // Actualizar datos de la imagen
+                        images[index] = {
+                            ...images[index],
+                            url: URL.createObjectURL(file),
+                            thumbnailUrl: canvas.toDataURL('image/jpeg', 0.8),
+                            width: img.width,
+                            height: img.height,
+                            loaded: true
+                        };
+                        
+                        loadedCount++;
+                        updateProgress(loadedCount, images.length);
+                        
+                        // Actualizar miniatura específica
+                        updateThumbnail(index);
+                        
+                        resolve();
+                        
+                    } catch (error) {
+                        reject(error);
+                    }
+                };
+                
+                img.onerror = () => reject(new Error(`Error cargando imagen: ${file.name}`));
+                img.src = URL.createObjectURL(file);
+            });
+        }
+
+        // Generar placeholders de miniaturas
+        function generateThumbnailPlaceholders() {
+            const grid = document.getElementById('thumbnailGrid');
+            grid.innerHTML = '';
+            
+            document.getElementById('imageCount').textContent = images.length;
+            
+            const containerWidth = grid.parentElement.parentElement.offsetWidth - 32;
+            const gap = 12;
+            const columnsCount = Math.floor((containerWidth + gap) / (thumbnailSize + gap));
+            const actualColumns = Math.max(1, Math.min(columnsCount, images.length));
+            
+            grid.style.gridTemplateColumns = `repeat(${actualColumns}, 1fr)`;
+            
+            images.forEach((img, index) => {
+                const thumbnail = document.createElement('div');
+                thumbnail.className = `thumbnail cursor-pointer rounded-lg overflow-hidden border-2 ${index === currentImageIndex ? 'border-blue-500 active' : 'border-gray-200 dark:border-gray-600'} bg-white dark:bg-gray-700 relative ${!img.loaded ? 'loading' : ''}`;
+                thumbnail.style.width = `${thumbnailSize}px`;
+                thumbnail.style.height = `${thumbnailSize}px`;
+                thumbnail.style.justifySelf = 'center';
+                thumbnail.id = `thumbnail-${index}`;
+                
+                if (img.loaded && img.thumbnailUrl) {
+                    // Imagen cargada
+                    const imgElement = document.createElement('img');
+                    imgElement.src = img.thumbnailUrl;
+                    imgElement.className = 'w-full h-full object-cover';
+                    imgElement.alt = img.name;
+                    thumbnail.appendChild(imgElement);
+                } else {
+                    // Placeholder de carga
+                    const placeholder = document.createElement('div');
+                    placeholder.className = 'w-full h-full flex items-center justify-center text-gray-400';
+                    placeholder.innerHTML = '<span class="text-2xl">📷</span>';
+                    thumbnail.appendChild(placeholder);
+                }
+                
+                // Overlay con información
+                const overlay = document.createElement('div');
+                overlay.className = 'absolute bottom-0 left-0 right-0 bg-black bg-opacity-70 text-white p-1';
+                
+                const nameDiv = document.createElement('div');
+                nameDiv.className = 'text-xs font-medium leading-tight truncate';
+                nameDiv.textContent = img.name;
+                nameDiv.title = img.name;
+                
+                const statusDiv = document.createElement('div');
+                statusDiv.className = 'text-xs opacity-75';
+                if (img.loaded) {
+                    const imageBoxes = textBoxes.filter(box => box.imageName === img.name);
+                    statusDiv.textContent = imageBoxes.length > 0 ? `${imageBoxes.length} cajas` : 'Sin cajas';
+                } else {
+                    statusDiv.textContent = 'Cargando...';
+                }
+                
+                overlay.appendChild(nameDiv);
+                overlay.appendChild(statusDiv);
+                
+                thumbnail.appendChild(overlay);
+                
+                if (img.loaded) {
+                    thumbnail.addEventListener('click', () => selectImage(index));
+                }
+                
+                grid.appendChild(thumbnail);
+            });
+        }
+
+        // Actualizar miniatura específica
+        function updateThumbnail(index) {
+            const thumbnail = document.getElementById(`thumbnail-${index}`);
+            if (!thumbnail) return;
+            
+            const img = images[index];
+            if (!img.loaded) return;
+            
+            // Remover clase de carga
+            thumbnail.classList.remove('loading');
+            
+            // Actualizar contenido
+            const placeholder = thumbnail.querySelector('div:not(.absolute)');
+            if (placeholder) {
+                const imgElement = document.createElement('img');
+                imgElement.src = img.thumbnailUrl;
+                imgElement.className = 'w-full h-full object-cover';
+                imgElement.alt = img.name;
+                thumbnail.replaceChild(imgElement, placeholder);
+            }
+            
+            // Actualizar status
+            const statusDiv = thumbnail.querySelector('.absolute .text-xs.opacity-75');
+            if (statusDiv) {
+                const imageBoxes = textBoxes.filter(box => box.imageName === img.name);
+                statusDiv.textContent = imageBoxes.length > 0 ? `${imageBoxes.length} cajas` : 'Sin cajas';
+            }
+            
+            // Habilitar click
+            thumbnail.addEventListener('click', () => selectImage(index));
+        }
+
+        // Generar miniaturas (versión completa)
+        function generateThumbnails() {
+            generateThumbnailPlaceholders();
+        }
+
+        // Seleccionar imagen
+        function selectImage(index) {
+            if (!images[index] || !images[index].loaded) {
+                alert('⏳ La imagen aún se está cargando. Espera un momento.');
+                return;
+            }
+            
+            currentImageIndex = index;
+            const img = images[index];
+            
+            // Actualizar imagen principal
+            const mainImage = document.getElementById('mainImage');
+            mainImage.onload = () => {
+                setTimeout(() => {
+                    renderTextBoxes();
+                }, 100);
+            };
+            
+            mainImage.src = img.url;
+            
+            // Actualizar miniaturas activas
+            generateThumbnails();
+            
+            // Actualizar lista de cajas
+            updateTextBoxList();
+            
+            // Deseleccionar caja actual
+            selectedTextBoxId = null;
+            updateTextControls();
+        }
+
+        // Agregar nueva caja de texto
+        function addTextBox() {
+            if (!hasProject || images.length === 0 || !images[currentImageIndex].loaded) return;
+
+            const currentImg = images[currentImageIndex];
+            const boxId = `box_${Date.now()}`;
+            
+            const newBox = {
+                id: boxId,
+                imageName: currentImg.name,
+                text: 'Nuevo texto',
+                x: 50,
+                y: 50,
+                width: 200,
+                height: 50,
+                fontFamily: defaultFont,
+                fontSize: 16,
+                fontWeight: 'normal',
+                fontStyle: 'normal',
+                textDecoration: 'none',
+                color: '#000000',
+                opacity: 1
+            };
+
+            textBoxes.push(newBox);
+            selectTextBox(boxId);
+            renderTextBoxes();
+            updateTextBoxList();
+        }
+
+        // Seleccionar caja de texto
+        function selectTextBox(boxId) {
+            selectedTextBoxId = boxId;
+            renderTextBoxes();
+            updateTextBoxList();
+            updateTextControls();
+        }
+
+        // Calcular tamaño de fuente óptimo para canvas
+        function calculateOptimalFontSizeForCanvas(ctx, text, boxWidth, boxHeight, baseFontSize, fontFamily, fontWeight, fontStyle) {
+            const padding = 16; // Padding interno
+            const availableWidth = boxWidth - padding;
+            const availableHeight = boxHeight - padding;
+            
+            let fontSize = baseFontSize;
+            let iterations = 0;
+            const maxIterations = 30;
+            
+            // Función para medir texto con saltos de línea
+            function measureTextHeight(size) {
+                ctx.font = `${fontStyle} ${fontWeight} ${size}px ${fontFamily}`;
+                const words = text.split(' ');
+                const lines = [];
+                let currentLine = '';
+                
+                words.forEach(word => {
+                    const testLine = currentLine ? currentLine + ' ' + word : word;
+                    const metrics = ctx.measureText(testLine);
+                    
+                    if (metrics.width > availableWidth && currentLine) {
+                        lines.push(currentLine);
+                        currentLine = word;
+                    } else {
+                        currentLine = testLine;
+                    }
+                });
+                
+                if (currentLine) {
+                    lines.push(currentLine);
+                }
+                
+                const lineHeight = size * 1.2;
+                return lines.length * lineHeight;
+            }
+            
+            // Reducir tamaño si no cabe
+            while (measureTextHeight(fontSize) > availableHeight && fontSize > 8 && iterations < maxIterations) {
+                fontSize -= 1;
+                iterations++;
+            }
+            
+            // Aumentar tamaño si cabe con espacio
+            iterations = 0;
+            while (measureTextHeight(fontSize + 1) < availableHeight && fontSize < baseFontSize && iterations < maxIterations) {
+                fontSize += 1;
+                iterations++;
+            }
+            
+            return Math.max(8, Math.min(fontSize, baseFontSize));
+        }
+        
+        // Dibujar texto dentro de una caja con saltos de línea
+        function drawTextInBox(ctx, text, x, y, width, height, fontSize) {
+            const padding = 8;
+            const availableWidth = width - padding * 2;
+            const lineHeight = fontSize * 1.2;
+            
+            const words = text.split(' ');
+            const lines = [];
+            let currentLine = '';
+            
+            words.forEach(word => {
+                const testLine = currentLine ? currentLine + ' ' + word : word;
+                const metrics = ctx.measureText(testLine);
+                
+                if (metrics.width > availableWidth && currentLine) {
+                    lines.push(currentLine);
+                    currentLine = word;
+                } else {
+                    currentLine = testLine;
+                }
+            });
+            
+            if (currentLine) {
+                lines.push(currentLine);
+            }
+            
+            // Calcular posición Y inicial para centrar verticalmente
+            const totalHeight = lines.length * lineHeight;
+            let startY = y + (height - totalHeight) / 2 + lineHeight / 2;
+            
+            // Dibujar cada línea centrada
+            lines.forEach((line, index) => {
+                const centerX = x + width / 2;
+                const lineY = startY + (index * lineHeight);
+                ctx.fillText(line, centerX, lineY);
+            });
+        }
+        
+        // Calcular tamaño de fuente óptimo para que el texto quepa en la caja
+        function calculateOptimalFontSize(text, boxWidth, boxHeight, baseFontSize, fontFamily, fontWeight, fontStyle) {
+            // Crear elemento temporal para medir
+            const tempDiv = document.createElement('div');
+            tempDiv.style.cssText = `
+                position: absolute;
+                visibility: hidden;
+                width: ${boxWidth}px;
+                height: auto;
+                font-family: ${fontFamily};
+                font-weight: ${fontWeight};
+                font-style: ${fontStyle};
+                padding: 8px;
+                box-sizing: border-box;
+                word-wrap: break-word;
+                white-space: normal;
+                text-align: center;
+                line-height: 1.2;
+            `;
+            tempDiv.textContent = text;
+            document.body.appendChild(tempDiv);
+            
+            let fontSize = baseFontSize;
+            let iterations = 0;
+            const maxIterations = 20;
+            
+            // Ajustar tamaño hacia abajo si el texto es muy largo
+            tempDiv.style.fontSize = fontSize + 'px';
+            let currentHeight = tempDiv.scrollHeight;
+            
+            // Si el texto no cabe, reducir tamaño
+            while (currentHeight > boxHeight && fontSize > 8 && iterations < maxIterations) {
+                fontSize -= 1;
+                tempDiv.style.fontSize = fontSize + 'px';
+                currentHeight = tempDiv.scrollHeight;
+                iterations++;
+            }
+            
+            // Si el texto cabe con mucho espacio, aumentar tamaño (hasta el tamaño base)
+            iterations = 0;
+            while (currentHeight < boxHeight * 0.7 && fontSize < baseFontSize && iterations < maxIterations) {
+                const testSize = fontSize + 1;
+                tempDiv.style.fontSize = testSize + 'px';
+                const testHeight = tempDiv.scrollHeight;
+                
+                if (testHeight <= boxHeight) {
+                    fontSize = testSize;
+                    currentHeight = testHeight;
+                } else {
+                    break;
+                }
+                iterations++;
+            }
+            
+            document.body.removeChild(tempDiv);
+            
+            // Asegurar un tamaño mínimo legible
+            return Math.max(8, Math.min(fontSize, baseFontSize));
+        }
+        
+        // Renderizar cajas de texto
+        function renderTextBoxes() {
+            const container = document.getElementById('textBoxContainer');
+            container.innerHTML = '';
+            
+            if (images.length === 0 || !images[currentImageIndex].loaded) return;
+            
+            const img = document.getElementById('mainImage');
+            const imgRect = img.getBoundingClientRect();
+            const containerRect = container.getBoundingClientRect();
+            
+            const imgOffsetX = imgRect.left - containerRect.left;
+            const imgOffsetY = imgRect.top - containerRect.top;
+            
+            // Filtrar cajas de la imagen actual
+            const currentImageBoxes = textBoxes.filter(box => 
+                box.imageName === images[currentImageIndex]?.name
+            );
+            
+            currentImageBoxes.forEach(box => {
+                const currentImg = images[currentImageIndex];
+                
+                // Convertir coordenadas de imagen original a coordenadas de pantalla
+                const scaleX = imgRect.width / currentImg.width;
+                const scaleY = imgRect.height / currentImg.height;
+                
+                const boxX = imgOffsetX + (box.x * scaleX);
+                const boxY = imgOffsetY + (box.y * scaleY);
+                const boxWidth = box.width * scaleX;
+                const boxHeight = box.height * scaleY;
+                
+                // Calcular tamaño de fuente óptimo
+                const baseFontSize = box.fontSize * Math.min(scaleX, scaleY);
+                const optimalFontSize = calculateOptimalFontSize(
+                    box.text,
+                    boxWidth,
+                    boxHeight,
+                    baseFontSize,
+                    box.fontFamily,
+                    box.fontWeight,
+                    box.fontStyle
+                );
+                
+                // Crear elemento de caja de texto
+                const textBoxElement = document.createElement('div');
+                textBoxElement.className = `text-box ${selectedTextBoxId === box.id ? 'selected' : ''}`;
+                textBoxElement.dataset.boxId = box.id;
+                textBoxElement.style.cssText = `
+                    left: ${boxX}px;
+                    top: ${boxY}px;
+                    width: ${boxWidth}px;
+                    height: ${boxHeight}px;
+                    font-family: ${box.fontFamily};
+                    font-size: ${optimalFontSize}px;
+                    font-weight: ${box.fontWeight};
+                    font-style: ${box.fontStyle};
+                    text-decoration: ${box.textDecoration};
+                    color: ${box.color};
+                    opacity: ${box.opacity};
+                    pointer-events: auto;
+                `;
+                
+                textBoxElement.textContent = box.text;
+                
+                // Eventos de interacción
+                textBoxElement.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    selectTextBox(box.id);
+                });
+                
+                textBoxElement.addEventListener('mousedown', (e) => {
+                    if (selectedTextBoxId === box.id) {
+                        startDragging(e, box);
+                    }
+                });
+                
+                // Agregar handles de redimensionamiento si está seleccionada
+                if (selectedTextBoxId === box.id) {
+                    ['nw', 'ne', 'sw', 'se'].forEach(position => {
+                        const handle = document.createElement('div');
+                        handle.className = `resize-handle ${position}`;
+                        handle.addEventListener('mousedown', (e) => {
+                            e.stopPropagation();
+                            startResizing(e, box, position);
+                        });
+                        textBoxElement.appendChild(handle);
+                    });
+                }
+                
+                container.appendChild(textBoxElement);
+            });
+        }
+
+        // Iniciar arrastre
+        function startDragging(e, box) {
+            isDragging = true;
+            dragStartX = e.clientX;
+            dragStartY = e.clientY;
+            
+            const img = document.getElementById('mainImage');
+            const imgRect = img.getBoundingClientRect();
+            const currentImg = images[currentImageIndex];
+            
+            const scaleX = imgRect.width / currentImg.width;
+            const scaleY = imgRect.height / currentImg.height;
+            
+            dragOffsetX = box.x * scaleX;
+            dragOffsetY = box.y * scaleY;
+            
+            e.preventDefault();
+        }
+
+        // Iniciar redimensionamiento
+        function startResizing(e, box, handle) {
+            isResizing = true;
+            resizeHandle = handle;
+            dragStartX = e.clientX;
+            dragStartY = e.clientY;
+            
+            e.preventDefault();
+        }
+
+        // Actualizar lista de cajas de texto
+        function updateTextBoxList() {
+            const list = document.getElementById('textBoxList');
+            list.innerHTML = '';
+            
+            if (!images[currentImageIndex] || !images[currentImageIndex].loaded) return;
+            
+            const currentImageBoxes = textBoxes.filter(box => 
+                box.imageName === images[currentImageIndex]?.name
+            );
+            
+            currentImageBoxes.forEach(box => {
+                const item = document.createElement('div');
+                item.className = `p-2 rounded cursor-pointer text-xs ${selectedTextBoxId === box.id ? 'bg-blue-100 dark:bg-blue-800' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`;
+                
+                const text = box.text.length > 30 ? box.text.substring(0, 30) + '...' : box.text;
+                item.textContent = text;
+                item.title = box.text;
+                
+                item.addEventListener('click', () => selectTextBox(box.id));
+                list.appendChild(item);
+            });
+        }
+
+        // Actualizar controles de texto
+        function updateTextControls() {
+            if (!selectedTextBoxId) {
+                document.getElementById('textContent').value = '';
+                document.getElementById('textContent').placeholder = 'Selecciona una caja de texto...';
+                updateButtonStates();
+                return;
+            }
+            
+            const box = textBoxes.find(b => b.id === selectedTextBoxId);
+            if (!box) return;
+            
+            // Actualizar valores de los controles
+            document.getElementById('textContent').value = box.text;
+            document.getElementById('fontFamily').value = box.fontFamily;
+            document.getElementById('fontSize').value = box.fontSize;
+            document.getElementById('textColor').value = box.color;
+            document.getElementById('textColorValue').textContent = box.color;
+            document.getElementById('textOpacity').value = Math.round(box.opacity * 100);
+            document.getElementById('opacityValue').textContent = Math.round(box.opacity * 100) + '%';
+            document.getElementById('posX').value = Math.round(box.x);
+            document.getElementById('posY').value = Math.round(box.y);
+            document.getElementById('boxWidth').value = Math.round(box.width);
+            document.getElementById('boxHeight').value = Math.round(box.height);
+            
+            // Actualizar botones de estilo
+            document.getElementById('boldToggle').classList.toggle('bg-blue-100', box.fontWeight === 'bold');
+            document.getElementById('italicToggle').classList.toggle('bg-blue-100', box.fontStyle === 'italic');
+            document.getElementById('underlineToggle').classList.toggle('bg-blue-100', box.textDecoration === 'underline');
+            
+            updateButtonStates();
+        }
+
+        // Eliminar caja de texto
+        function deleteTextBox() {
+            if (!selectedTextBoxId) return;
+            
+            textBoxes = textBoxes.filter(box => box.id !== selectedTextBoxId);
+            selectedTextBoxId = null;
+            
+            renderTextBoxes();
+            updateTextBoxList();
+            updateTextControls();
+        }
+
+        // Duplicar caja de texto
+        function duplicateTextBox() {
+            if (!selectedTextBoxId) return;
+            
+            const originalBox = textBoxes.find(box => box.id === selectedTextBoxId);
+            if (!originalBox) return;
+            
+            const newBox = {
+                ...originalBox,
+                id: `box_${Date.now()}`,
+                x: originalBox.x + 20,
+                y: originalBox.y + 20
+            };
+            
+            textBoxes.push(newBox);
+            selectTextBox(newBox.id);
+            renderTextBoxes();
+            updateTextBoxList();
+        }
+
+        // Control de zoom
+        function updateZoom(newZoom) {
+            currentZoom = Math.max(0.25, Math.min(4, newZoom));
+            const mainImage = document.getElementById('mainImage');
+            mainImage.style.transform = `scale(${currentZoom})`;
+            document.getElementById('zoomLevel').textContent = `${Math.round(currentZoom * 100)}%`;
+            
+            // Redibujar cajas de texto
+            setTimeout(() => {
+                renderTextBoxes();
+            }, 100);
+        }
+
+        // Exportar imagen actual
+        async function exportCurrentImage() {
+            if (!hasProject || images.length === 0 || !images[currentImageIndex].loaded) return;
+            
+            try {
+                const currentImg = images[currentImageIndex];
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                
+                canvas.width = currentImg.width;
+                canvas.height = currentImg.height;
+                
+                // Cargar imagen base
+                const img = new Image();
+                img.onload = () => {
+                    // Dibujar imagen base
+                    ctx.drawImage(img, 0, 0);
+                    
+                    // Dibujar cajas de texto
+                    const currentImageBoxes = textBoxes.filter(box => 
+                        box.imageName === currentImg.name
+                    );
+                    
+                    currentImageBoxes.forEach(box => {
+                        ctx.save();
+                        
+                        // Calcular tamaño de fuente óptimo para exportación
+                        const optimalFontSize = calculateOptimalFontSizeForCanvas(
+                            ctx,
+                            box.text,
+                            box.width,
+                            box.height,
+                            box.fontSize,
+                            box.fontFamily,
+                            box.fontWeight,
+                            box.fontStyle
+                        );
+                        
+                        // Configurar estilo de texto
+                        ctx.font = `${box.fontStyle} ${box.fontWeight} ${optimalFontSize}px ${box.fontFamily}`;
+                        ctx.fillStyle = box.color;
+                        ctx.globalAlpha = box.opacity;
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        
+                        // Dibujar texto con saltos de línea si es necesario
+                        drawTextInBox(ctx, box.text, box.x, box.y, box.width, box.height, optimalFontSize);
+                        
+                        ctx.restore();
+                    });
+                    
+                    // Descargar imagen
+                    canvas.toBlob((blob) => {
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = currentImg.name.replace(/\.[^/.]+$/, '_with_text.png');
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        
+                        alert('✅ Imagen exportada exitosamente');
+                    }, 'image/png');
+                };
+                
+                img.src = currentImg.url;
+                
+            } catch (error) {
+                console.error('Error exportando imagen:', error);
+                alert('❌ Error al exportar imagen: ' + error.message);
+            }
+        }
+
+        // Exportar todas las imágenes
+        async function exportAllImages() {
+            if (!hasProject || images.length === 0) return;
+            
+            try {
+                let exportedCount = 0;
+                
+                for (let i = 0; i < images.length; i++) {
+                    const img = images[i];
+                    if (img.loaded) {
+                        await exportImageWithText(img);
+                        exportedCount++;
+                    }
+                    
+                    // Pequeña pausa para no bloquear la UI
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+                
+                alert(`✅ ${exportedCount} imágenes exportadas exitosamente`);
+                
+            } catch (error) {
+                console.error('Error exportando imágenes:', error);
+                alert('❌ Error al exportar imágenes: ' + error.message);
+            }
+        }
+
+        // Exportar imagen individual con texto
+        function exportImageWithText(imageData) {
+            return new Promise((resolve, reject) => {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                
+                canvas.width = imageData.width;
+                canvas.height = imageData.height;
+                
+                const img = new Image();
+                img.onload = () => {
+                    try {
+                        // Dibujar imagen base
+                        ctx.drawImage(img, 0, 0);
+                        
+                        // Dibujar cajas de texto de esta imagen
+                        const imageBoxes = textBoxes.filter(box => 
+                            box.imageName === imageData.name
+                        );
+                        
+                        imageBoxes.forEach(box => {
+                            ctx.save();
+                            
+                            // Calcular tamaño de fuente óptimo para exportación
+                            const optimalFontSize = calculateOptimalFontSizeForCanvas(
+                                ctx,
+                                box.text,
+                                box.width,
+                                box.height,
+                                box.fontSize,
+                                box.fontFamily,
+                                box.fontWeight,
+                                box.fontStyle
+                            );
+                            
+                            // Configurar estilo de texto
+                            ctx.font = `${box.fontStyle} ${box.fontWeight} ${optimalFontSize}px ${box.fontFamily}`;
+                            ctx.fillStyle = box.color;
+                            ctx.globalAlpha = box.opacity;
+                            ctx.textAlign = 'center';
+                            ctx.textBaseline = 'middle';
+                            
+                            // Dibujar texto con saltos de línea si es necesario
+                            drawTextInBox(ctx, box.text, box.x, box.y, box.width, box.height, optimalFontSize);
+                            
+                            ctx.restore();
+                        });
+                        
+                        // Descargar imagen
+                        canvas.toBlob((blob) => {
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = imageData.name.replace(/\.[^/.]+$/, '_with_text.png');
+                            a.click();
+                            URL.revokeObjectURL(url);
+                            resolve();
+                        }, 'image/png');
+                        
+                    } catch (error) {
+                        reject(error);
+                    }
+                };
+                
+                img.onerror = () => reject(new Error(`Error cargando imagen: ${imageData.name}`));
+                img.src = imageData.url;
+            });
+        }
+
+        // Event Listeners
+
+        // Control de tamaño de miniaturas
+        document.getElementById('thumbnailSize').addEventListener('input', (e) => {
+            thumbnailSize = parseInt(e.target.value);
+            document.getElementById('sizeValue').textContent = `${thumbnailSize}px`;
+            if (hasProject) {
+                generateThumbnails();
+            }
+        });
+
+        // Controles de zoom
+        document.getElementById('zoomIn').addEventListener('click', () => {
+            updateZoom(currentZoom * 1.25);
+        });
+
+        document.getElementById('zoomOut').addEventListener('click', () => {
+            updateZoom(currentZoom * 0.8);
+        });
+
+        document.getElementById('zoomDefault').addEventListener('click', () => {
+            updateZoom(1);
+        });
+
+        // Botones principales
+        document.getElementById('loadImages').addEventListener('click', loadImages);
+        document.getElementById('loadCSV').addEventListener('click', loadCSV);
+        document.getElementById('loadCustomFont').addEventListener('click', loadCustomFont);
+        document.getElementById('addTextBox').addEventListener('click', addTextBox);
+        document.getElementById('exportImage').addEventListener('click', exportCurrentImage);
+        document.getElementById('exportAll').addEventListener('click', exportAllImages);
+        document.getElementById('deleteTextBox').addEventListener('click', deleteTextBox);
+        document.getElementById('duplicateTextBox').addEventListener('click', duplicateTextBox);
+
+        // Controles de texto
+        document.getElementById('textContent').addEventListener('input', (e) => {
+            if (selectedTextBoxId) {
+                const box = textBoxes.find(b => b.id === selectedTextBoxId);
+                if (box) {
+                    box.text = e.target.value;
+                    renderTextBoxes();
+                    updateTextBoxList();
+                }
+            }
+        });
+
+        document.getElementById('fontFamily').addEventListener('change', (e) => {
+            if (selectedTextBoxId) {
+                const box = textBoxes.find(b => b.id === selectedTextBoxId);
+                if (box) {
+                    box.fontFamily = e.target.value;
+                    renderTextBoxes();
+                }
+            }
+        });
+
+        document.getElementById('fontSize').addEventListener('input', (e) => {
+            if (selectedTextBoxId) {
+                const box = textBoxes.find(b => b.id === selectedTextBoxId);
+                if (box) {
+                    box.fontSize = parseInt(e.target.value);
+                    renderTextBoxes();
+                }
+            }
+        });
+
+        // Botones de estilo
+        document.getElementById('boldToggle').addEventListener('click', () => {
+            if (selectedTextBoxId) {
+                const box = textBoxes.find(b => b.id === selectedTextBoxId);
+                if (box) {
+                    box.fontWeight = box.fontWeight === 'bold' ? 'normal' : 'bold';
+                    updateTextControls();
+                    renderTextBoxes();
+                }
+            }
+        });
+
+        document.getElementById('italicToggle').addEventListener('click', () => {
+            if (selectedTextBoxId) {
+                const box = textBoxes.find(b => b.id === selectedTextBoxId);
+                if (box) {
+                    box.fontStyle = box.fontStyle === 'italic' ? 'normal' : 'italic';
+                    updateTextControls();
+                    renderTextBoxes();
+                }
+            }
+        });
+
+        document.getElementById('underlineToggle').addEventListener('click', () => {
+            if (selectedTextBoxId) {
+                const box = textBoxes.find(b => b.id === selectedTextBoxId);
+                if (box) {
+                    box.textDecoration = box.textDecoration === 'underline' ? 'none' : 'underline';
+                    updateTextControls();
+                    renderTextBoxes();
+                }
+            }
+        });
+
+        // Color y opacidad
+        document.getElementById('textColor').addEventListener('input', (e) => {
+            if (selectedTextBoxId) {
+                const box = textBoxes.find(b => b.id === selectedTextBoxId);
+                if (box) {
+                    box.color = e.target.value;
+                    document.getElementById('textColorValue').textContent = e.target.value;
+                    renderTextBoxes();
+                }
+            }
+        });
+
+        document.getElementById('textOpacity').addEventListener('input', (e) => {
+            if (selectedTextBoxId) {
+                const box = textBoxes.find(b => b.id === selectedTextBoxId);
+                if (box) {
+                    box.opacity = parseInt(e.target.value) / 100;
+                    document.getElementById('opacityValue').textContent = e.target.value + '%';
+                    renderTextBoxes();
+                }
+            }
+        });
+
+        // Posición y tamaño
+        ['posX', 'posY', 'boxWidth', 'boxHeight'].forEach(controlId => {
+            document.getElementById(controlId).addEventListener('input', (e) => {
+                if (selectedTextBoxId) {
+                    const box = textBoxes.find(b => b.id === selectedTextBoxId);
+                    if (box) {
+                        const value = parseInt(e.target.value);
+                        switch(controlId) {
+                            case 'posX': box.x = Math.max(0, value); break;
+                            case 'posY': box.y = Math.max(0, value); break;
+                            case 'boxWidth': box.width = Math.max(50, value); break;
+                            case 'boxHeight': box.height = Math.max(30, value); break;
+                        }
+                        renderTextBoxes();
+                    }
+                }
+            });
+        });
+
+        // Eventos de mouse para arrastre y redimensionamiento
+        document.addEventListener('mousemove', (e) => {
+            if (isDragging && selectedTextBoxId) {
+                const box = textBoxes.find(b => b.id === selectedTextBoxId);
+                if (box) {
+                    const img = document.getElementById('mainImage');
+                    const imgRect = img.getBoundingClientRect();
+                    const currentImg = images[currentImageIndex];
+                    
+                    const scaleX = imgRect.width / currentImg.width;
+                    const scaleY = imgRect.height / currentImg.height;
+                    
+                    const deltaX = e.clientX - dragStartX;
+                    const deltaY = e.clientY - dragStartY;
+                    
+                    box.x = Math.max(0, Math.min(currentImg.width - box.width, (dragOffsetX + deltaX) / scaleX));
+                    box.y = Math.max(0, Math.min(currentImg.height - box.height, (dragOffsetY + deltaY) / scaleY));
+                    
+                    renderTextBoxes();
+                    updateTextControls();
+                }
+            } else if (isResizing && selectedTextBoxId) {
+                const box = textBoxes.find(b => b.id === selectedTextBoxId);
+                if (box) {
+                    const img = document.getElementById('mainImage');
+                    const imgRect = img.getBoundingClientRect();
+                    const currentImg = images[currentImageIndex];
+                    
+                    const scaleX = imgRect.width / currentImg.width;
+                    const scaleY = imgRect.height / currentImg.height;
+                    
+                    const deltaX = (e.clientX - dragStartX) / scaleX;
+                    const deltaY = (e.clientY - dragStartY) / scaleY;
+                    
+                    // Redimensionar según el handle
+                    switch(resizeHandle) {
+                        case 'se':
+                            box.width = Math.max(50, box.width + deltaX);
+                            box.height = Math.max(30, box.height + deltaY);
+                            break;
+                        case 'sw':
+                            box.width = Math.max(50, box.width - deltaX);
+                            box.height = Math.max(30, box.height + deltaY);
+                            box.x = Math.max(0, box.x + deltaX);
+                            break;
+                        case 'ne':
+                            box.width = Math.max(50, box.width + deltaX);
+                            box.height = Math.max(30, box.height - deltaY);
+                            box.y = Math.max(0, box.y + deltaY);
+                            break;
+                        case 'nw':
+                            box.width = Math.max(50, box.width - deltaX);
+                            box.height = Math.max(30, box.height - deltaY);
+                            box.x = Math.max(0, box.x + deltaX);
+                            box.y = Math.max(0, box.y + deltaY);
+                            break;
+                    }
+                    
+                    dragStartX = e.clientX;
+                    dragStartY = e.clientY;
+                    
+                    renderTextBoxes();
+                    updateTextControls();
+                }
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            isDragging = false;
+            isResizing = false;
+            resizeHandle = null;
+        });
+
+        // Funcionalidad del modo oscuro
+        let isDarkMode = false;
+        
+        function toggleTheme() {
+            isDarkMode = !isDarkMode;
+            const html = document.documentElement;
+            const themeIcon = document.getElementById('themeIcon');
+            
+            if (isDarkMode) {
+                html.classList.add('dark');
+                themeIcon.textContent = '☀️';
+                localStorage.setItem('darkMode', 'true');
+            } else {
+                html.classList.remove('dark');
+                themeIcon.textContent = '🌙';
+                localStorage.setItem('darkMode', 'false');
+            }
+        }
+        
+        // Cargar tema guardado
+        const savedTheme = localStorage.getItem('darkMode');
+        if (savedTheme === 'true') {
+            isDarkMode = true;
+            document.documentElement.classList.add('dark');
+            document.getElementById('themeIcon').textContent = '☀️';
+        }
+        
+        document.getElementById('themeToggle').addEventListener('click', toggleTheme);
+
+        // Inicializar
+        initializeFonts();
+        updateUI();
+    </script>
+ <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9aa77a06814088b2',t:'MTc2NTE0NjcyMi4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>

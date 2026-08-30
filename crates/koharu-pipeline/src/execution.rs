@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     sync::Arc,
     time::Instant,
 };
@@ -30,7 +30,6 @@ pub(crate) struct Execution<'a> {
     scheduler: Scheduler,
     scene: Snapshot,
     images: BTreeMap<EntityId, Arc<ImageCache>>,
-    busy_stages: BTreeSet<Stage>,
     completed: usize,
     failure: Option<PipelineError>,
     base: koharu_scene::Revision,
@@ -50,10 +49,10 @@ impl<'a> Execution<'a> {
         let base = snapshot.revision();
         let stages = request
             .operation
-            .stages()
-            .map_err(|error| PipelineError::new(ErrorKind::InvalidInput, None, error))?;
+        .stages()
+        .map_err(|error| PipelineError::new(ErrorKind::InvalidInput, None, error))?;
         let scope = NormalizedScope::new(&snapshot, &request.scope, &stages)
-            .map_err(|error| PipelineError::new(ErrorKind::InvalidInput, None, error))?;
+        .map_err(|error| PipelineError::new(ErrorKind::InvalidInput, None, error))?;
         let pages = scope.pages().to_vec();
         if let Some(mask) = request.inpainting_mask.as_ref()
             && (!pages.contains(&mask.page) || !stages.contains(&Stage::Inpainting))
@@ -82,7 +81,6 @@ impl<'a> Execution<'a> {
             scheduler: Scheduler::new(&pages, &stages),
             scene: snapshot,
             images: BTreeMap::new(),
-            busy_stages: BTreeSet::new(),
             completed: 0,
             failure: None,
             base,
@@ -109,7 +107,6 @@ impl<'a> Execution<'a> {
             let Some(completion) = running.next().await else {
                 break;
             };
-            self.busy_stages.remove(&completion.stage);
             if self.stopped() || self.failure.is_some() {
                 continue;
             }
@@ -118,6 +115,7 @@ impl<'a> Execution<'a> {
             }
         }
 
+        self.runner.unload_all();
         self.finalize()
     }
 
@@ -125,8 +123,7 @@ impl<'a> Execution<'a> {
         if self.stopped() || self.failure.is_some() {
             return None;
         }
-        let (page, stage) = self.scheduler.start_next(&self.busy_stages)?;
-        self.busy_stages.insert(stage);
+        let (page, stage) = self.scheduler.start_next()?;
         let images = self
             .images
             .entry(page)
@@ -136,17 +133,17 @@ impl<'a> Execution<'a> {
             stage,
             StageInput::new(
                 self.scene.clone(),
-                page,
-                self.scope.entities(),
-                self.scope.region(page),
-                images,
-                self.inpainting_mask
-                    .as_ref()
-                    .filter(|mask| stage == Stage::Inpainting && mask.page == page)
-                    .cloned(),
+                            page,
+                            self.scope.entities(),
+                            self.scope.region(page),
+                            images,
+                            self.inpainting_mask
+                            .as_ref()
+                            .filter(|mask| stage == Stage::Inpainting && mask.page == page)
+                            .cloned(),
             ),
             self.stop.clone(),
-            self.progress.clone(),
+                           self.progress.clone(),
         ))
     }
 
@@ -174,12 +171,12 @@ impl<'a> Execution<'a> {
                 self.mark_complete(page, stage);
                 progress::emit(
                     self.progress.as_ref(),
-                    Progress::Finished {
-                        page,
-                        stage,
-                        model,
-                        elapsed,
-                    },
+                               Progress::Finished {
+                                   page,
+                                   stage,
+                                   model,
+                                   elapsed,
+                               },
                 );
             }
         }
@@ -193,32 +190,39 @@ impl<'a> Execution<'a> {
         patch: koharu_scene::Patch,
     ) -> std::result::Result<bool, PipelineError> {
         let patch = patch
-            .rebase_on(&self.scene)
-            .and_then(|patch| {
-                patch.validate_on(&self.scene)?;
-                Ok(patch.with_label(format!("Pipeline {stage} for page {page}")))
-            })
-            .context("failed to rebase stage output onto the latest scene")
-            .map_err(|error| PipelineError::new(ErrorKind::InvalidOutput, Some(stage), error))?;
+        .rebase_on(&self.scene)
+        .and_then(|patch| {
+            patch.validate_on(&self.scene)?;
+            Ok(patch.with_label(format!("Pipeline {stage} for page {page}")))
+        })
+        .context("failed to rebase stage output onto the latest scene")
+        .map_err(|error| PipelineError::new(ErrorKind::InvalidOutput, Some(stage), error))?;
         if self.stopped() {
             return Ok(false);
         }
 
         let next = self
-            .committer
-            .commit(StageOutput { page, stage, patch })
-            .await
-            .with_context(|| format!("failed to commit {stage} output for page {page}"))
-            .map_err(|error| PipelineError::new(ErrorKind::Commit, Some(stage), error))?;
+        .committer
+        .commit(StageOutput { page, stage, patch })
+        .await
+        .with_context(|| format!("failed to commit {stage} output for page {page}"))
+        .map_err(|error| PipelineError::new(ErrorKind::Commit, Some(stage), error))?;
         validate_commit(&self.scene, &next)
-            .map_err(|error| PipelineError::new(ErrorKind::Commit, Some(stage), error))?;
+        .map_err(|error| PipelineError::new(ErrorKind::Commit, Some(stage), error))?;
         self.scene = next;
         Ok(true)
     }
 
     fn mark_complete(&mut self, page: EntityId, stage: Stage) {
-        if self.scheduler.complete_stage(page, stage) {
+        let progress = self.scheduler.complete_stage(page, stage);
+        if progress.page_finished {
             self.images.remove(&page);
+        }
+        if progress.stage_finished {
+            // Every page has finished this stage and the batch scheduler
+            // won't offer it again for this run, so free its accelerator
+            // memory before the next stage's model is loaded.
+            self.runner.unload(stage);
         }
         self.completed += 1;
     }
@@ -265,11 +269,11 @@ impl<'a> Execution<'a> {
 fn validate_commit(previous: &Snapshot, next: &Snapshot) -> Result<()> {
     ensure!(
         previous.project_id() == next.project_id(),
-        "committer returned a snapshot from another project"
+            "committer returned a snapshot from another project"
     );
     ensure!(
         next.revision() > previous.revision(),
-        "committer did not advance the scene revision"
+            "committer did not advance the scene revision"
     );
     Ok(())
 }

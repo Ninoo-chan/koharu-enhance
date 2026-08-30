@@ -831,6 +831,12 @@ impl Traversal<'_> {
                 .as_ref()
                 .and_then(|value| value.font_style)
                 .map(Into::into),
+            underline: typography.as_ref().is_some_and(|value| {
+                value
+                    .extensions
+                    .get("dev.koharu.text.underline")
+                    .is_some_and(|underline| underline == "true")
+            }),
             font_size: typography.as_ref().and_then(|value| value.size),
             minimum_font_size: MINIMUM_FONT_SIZE,
             auto_fit: typography.as_ref().is_none_or(|value| value.auto_fit),

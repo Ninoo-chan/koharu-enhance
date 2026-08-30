@@ -161,6 +161,7 @@ pub struct Typography {
     pub preferred_font: Option<String>,
     pub font_weight: Option<u16>,
     pub font_style: Option<koharu_scene::FontStyle>,
+    pub underline: bool,
     pub size: Option<f32>,
     pub auto_fit: bool,
     pub color: Option<[u8; 4]>,
@@ -470,6 +471,79 @@ impl Project {
         ))
     }
 
+    pub(crate) async fn add_manual_detection_region(
+        &mut self,
+        page: EntityId,
+        points: Vec<Point>,
+    ) -> Result<(Commit, EntityId, EntityId)> {
+        if points.len() < 3 || points.iter().any(|point| !point.x.is_finite() || !point.y.is_finite()) {
+            bail!("manual detection region must contain finite polygon points");
+        }
+        let snapshot = self.snapshot();
+        let geometry = SceneGeometry {
+            origin: Origin::User,
+            points: points
+                .into_iter()
+                .map(|point| ScenePoint { x: point.x, y: point.y })
+                .collect(),
+        };
+        for entity in snapshot.descendants(page)? {
+            if snapshot
+                .component::<SceneRegion>(entity.id())?
+                .is_some()
+                && snapshot
+                    .component::<SceneGeometry>(entity.id())?
+                    .is_some_and(|existing| polygons_touch_or_overlap(&geometry.points, &existing.points))
+            {
+                bail!("manual detection region overlaps an existing text region");
+            }
+        }
+        let mut region = None;
+        let mut layer = None;
+        let patch = snapshot.patch(|edit| {
+            let added_region = edit.add_analysis_region::<koharu_scene::TextRegion>(
+                page,
+                At::End,
+                &geometry,
+                Some("Manual text region".to_owned()),
+            )?;
+            let content = edit.add_text_content(page, At::End)?;
+            let added_layer = edit.add_text_layer(
+                page,
+                At::End,
+                content,
+                &SceneTextLayout {
+                    origin: Origin::User,
+                    kind: TextLayoutKind::Paragraph,
+                },
+            )?;
+            edit.relate::<koharu_scene::RecognizedFrom>(content, added_region)?;
+            edit.relate::<koharu_scene::FitsTo>(added_layer, added_region)?;
+            region = Some(added_region);
+            layer = Some(added_layer);
+            Ok(())
+        })?;
+        Ok((
+            self.commit(patch).await?,
+            region.expect("manual detection region was added"),
+            layer.expect("manual detection layer was added"),
+        ))
+    }
+
+    pub(crate) async fn delete_detection_regions(&mut self, regions: Vec<EntityId>) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        let patch = snapshot.patch(|edit| {
+            for region in regions.iter().copied() {
+                if snapshot.component::<SceneRegion>(region)?.is_some() {
+                    edit.promote_entity_to_user(region)?;
+                    edit.remove_entity(region, RemovePolicy::Cascade)?;
+                }
+            }
+            Ok(())
+        })?;
+        self.commit(patch).await
+    }
+
     pub(crate) async fn set_source_text(
         &mut self,
         layer: EntityId,
@@ -551,7 +625,13 @@ impl Project {
                         stroke_width: update.typography.stroke_width,
                         alignment: update.typography.alignment,
                         writing_mode: update.typography.writing_mode,
-                        extensions: Default::default(),
+                        extensions: if update.typography.underline {
+                            [("dev.koharu.text.underline".to_owned(), "true".to_owned())]
+                                .into_iter()
+                                .collect()
+                        } else {
+                            Default::default()
+                        },
                     },
                 )?;
             }
@@ -1096,6 +1176,10 @@ impl Project {
             preferred_font: typography.preferred_font,
             font_weight: typography.font_weight,
             font_style: typography.font_style,
+            underline: typography
+                .extensions
+                .get("dev.koharu.text.underline")
+                .is_some_and(|value| value == "true"),
             size: typography.size,
             auto_fit: typography.auto_fit,
             color: typography.color,
@@ -1322,6 +1406,60 @@ fn rasterize_stroke(
             }
         }
     }
+}
+
+fn polygons_touch_or_overlap(left: &[ScenePoint], right: &[ScenePoint]) -> bool {
+    if left.len() < 3 || right.len() < 3 {
+        return true;
+    }
+    for left_index in 0..left.len() {
+        let left_start = left[left_index];
+        let left_end = left[(left_index + 1) % left.len()];
+        for right_index in 0..right.len() {
+            let right_start = right[right_index];
+            let right_end = right[(right_index + 1) % right.len()];
+            if segments_intersect(left_start, left_end, right_start, right_end) {
+                return true;
+            }
+        }
+    }
+    point_in_polygon(left[0], right) || point_in_polygon(right[0], left)
+}
+
+fn segments_intersect(a: ScenePoint, b: ScenePoint, c: ScenePoint, d: ScenePoint) -> bool {
+    const EPSILON: f64 = 1e-6;
+    fn orientation(a: ScenePoint, b: ScenePoint, c: ScenePoint) -> f64 {
+        (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+    }
+    fn on_segment(a: ScenePoint, b: ScenePoint, point: ScenePoint) -> bool {
+        point.x >= a.x.min(b.x) - EPSILON
+            && point.x <= a.x.max(b.x) + EPSILON
+            && point.y >= a.y.min(b.y) - EPSILON
+            && point.y <= a.y.max(b.y) + EPSILON
+    }
+    let first = orientation(a, b, c);
+    let second = orientation(a, b, d);
+    let third = orientation(c, d, a);
+    let fourth = orientation(c, d, b);
+    (first.abs() <= EPSILON && on_segment(a, b, c))
+        || (second.abs() <= EPSILON && on_segment(a, b, d))
+        || (third.abs() <= EPSILON && on_segment(c, d, a))
+        || (fourth.abs() <= EPSILON && on_segment(c, d, b))
+        || ((first > 0.0) != (second > 0.0) && (third > 0.0) != (fourth > 0.0))
+}
+
+fn point_in_polygon(point: ScenePoint, polygon: &[ScenePoint]) -> bool {
+    let mut inside = false;
+    for index in 0..polygon.len() {
+        let left = polygon[index];
+        let right = polygon[(index + 1) % polygon.len()];
+        if (left.y > point.y) != (right.y > point.y)
+            && point.x < (right.x - left.x) * (point.y - left.y) / (right.y - left.y) + left.x
+        {
+            inside = !inside;
+        }
+    }
+    inside
 }
 
 #[cfg(test)]

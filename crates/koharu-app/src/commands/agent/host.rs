@@ -354,6 +354,7 @@ impl Host for KoharuHost {
                     preferred_font: arguments.preferred_font,
                     font_weight: arguments.font_weight,
                     font_style: arguments.font_style.map(Into::into),
+                    underline: arguments.underline,
                     size: arguments.size,
                     auto_fit: arguments.auto_fit,
                     color: arguments.color,
@@ -608,6 +609,8 @@ struct SetTypography {
     preferred_font: Option<String>,
     font_weight: Option<u16>,
     font_style: Option<AgentFontStyle>,
+    #[serde(default)]
+    underline: bool,
     size: Option<f32>,
     auto_fit: bool,
     color: Option<[u8; 4]>,

@@ -40,45 +40,45 @@ export function Providers({ children }: { children: ReactNode }) {
       lifecycle.bound = true
       const completed = new Map<string, number>()
       const channel = <T,>(receive: (value: T) => void) =>
-        new Channel<T>((value) => {
-          if (lifecycle.active) receive(value)
-        })
+      new Channel<T>((value) => {
+        if (lifecycle.active) receive(value)
+      })
 
       void refreshTranslationModels().catch(() => undefined)
 
       void commands
-        .subscribe(
-          channel<CanvasState>(receiveCanvas),
-          channel<Job>((job) => {
-            const previous = completed.get(job.id) ?? 0
-            completed.set(job.id, job.completed)
-            receiveJob(job)
-            if (job.completed > previous || job.state !== 'running') {
-              void refresh(projectKey, pagesKey, pageKey).catch(() => undefined)
-            }
-          }),
-          channel<Download>(receiveDownload),
-          channel<ModelResources>(receiveResources),
-          channel<ProjectInfo | null>((project) => {
-            const previous = queryClient.getQueryData<ProjectInfo | null>(projectKey)
-            queryClient.setQueryData(projectKey, project)
-            if (previous?.name !== project?.name) {
-              const store = useKoharuStore.getState()
-              store.selectPages(project?.active_page ? [project.active_page] : [])
-              store.selectLayers([])
-            }
-            if (project) {
-              void refresh(pagesKey, pageKey).catch(() => undefined)
-            } else {
-              queryClient.setQueryData(pagesKey, [])
-              queryClient.setQueryData(pageKey, null)
-            }
-          }),
-        )
-        .then((state) => {
-          if (lifecycle.active) receiveStartupState(state)
-        })
-        .catch(() => undefined)
+      .subscribe(
+        channel<CanvasState>(receiveCanvas),
+                 channel<Job>((job) => {
+                   const previous = completed.get(job.id) ?? 0
+                   completed.set(job.id, job.completed)
+                   receiveJob(job)
+                   if (job.completed > previous || job.state !== 'running') {
+                     void refresh(projectKey, pagesKey, pageKey).catch(() => undefined)
+                   }
+                 }),
+                 channel<Download>(receiveDownload),
+                 channel<ModelResources>(receiveResources),
+                 channel<ProjectInfo | null>((project) => {
+                   const previous = queryClient.getQueryData<ProjectInfo | null>(projectKey)
+                   queryClient.setQueryData(projectKey, project)
+                   if (previous?.name !== project?.name) {
+                     const store = useKoharuStore.getState()
+                     store.selectPages(project?.active_page ? [project.active_page] : [])
+                     store.selectLayers([])
+                   }
+                   if (project) {
+                     void refresh(pagesKey, pageKey).catch(() => undefined)
+                   } else {
+                     queryClient.setQueryData(pagesKey, [])
+                     queryClient.setQueryData(pageKey, null)
+                   }
+                 }),
+      )
+      .then((state) => {
+        if (lifecycle.active) receiveStartupState(state)
+      })
+      .catch(() => undefined)
     }
 
     return () => {
@@ -107,14 +107,14 @@ export function Providers({ children }: { children: ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <I18nextProvider i18n={i18n}>
-        <TooltipProvider delay={0}>
-          <ClientOnly>
-            <StartupBoundary>{children}</StartupBoundary>
-            <Toaster />
-          </ClientOnly>
-        </TooltipProvider>
-      </I18nextProvider>
+    <I18nextProvider i18n={i18n}>
+    <TooltipProvider delay={0}>
+    <ClientOnly>
+    <StartupBoundary>{children}</StartupBoundary>
+    <Toaster />
+    </ClientOnly>
+    </TooltipProvider>
+    </I18nextProvider>
     </QueryClientProvider>
   )
 }
@@ -123,8 +123,8 @@ function StartupBoundary({ children }: { children: ReactNode }) {
   const initialized = useKoharuStore((state) => state.initialized)
   return initialized ? (
     <>
-      {children}
-      <Updater />
+    {children}
+    <Updater />
     </>
   ) : (
     <StartupView />

@@ -182,6 +182,7 @@
       "oblique": "Oblique"
     },
     "fontWeight": "Font weight",
+    "underline": "Underline",
     "horizontal": "Horizontal",
     "increaseBorderWidth": "Increase border width",
     "opacity": "Opacity",

@@ -140,6 +140,19 @@ impl StageRunner {
             })
     }
 
+    /// Unloads the model backing `stage`, if one is currently loaded.
+    /// Called once every page has finished a stage, so the next stage's
+    /// model doesn't have to compete with it for accelerator memory.
+    pub(crate) fn unload(&self, stage: Stage) {
+        self.stages.unload(stage);
+    }
+
+    pub(crate) fn unload_all(&self) {
+        for stage in Stage::ALL {
+            self.unload(stage);
+        }
+    }
+
     fn stage_error(&self, stage: Stage, model: &str, failure: AttemptFailure) -> PipelineError {
         self.stages.unload(stage);
         let message = match failure.kind {

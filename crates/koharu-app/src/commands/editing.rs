@@ -7,7 +7,7 @@ use tauri::State;
 
 use super::{
     ChannelExt as _, Error,
-    canvas::{CanvasChannel, Point},
+    canvas::{CanvasChannel, LayerCommit, Point},
     project::{CurrentProject, Page, Project, Typography},
 };
 async fn synchronize_canvas(
@@ -214,6 +214,59 @@ pub(crate) async fn set_geometry(
         let mut project = project.project.lock().await;
         let project = project.as_mut().context("no project is open")?;
         let commit = project.set_geometry(updates).await?;
+        project.record_commit(&commit);
+        (commit, project.active_page())
+    };
+    let canvas = synchronize_canvas(&desktop, &commit, page).await?;
+    canvas_channel.channel.publish(canvas);
+    Ok(())
+}
+
+#[tracing::instrument(
+    target = "koharu_metrics",
+    name = "detection_region_added",
+    skip_all,
+    fields(origin = "user", point_count = points.len()),
+)]
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn add_manual_detection_region(
+    points: Vec<Point>,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<LayerCommit, Error> {
+    let (commit, page, layer) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let page = project.active_page().context("the project has no active page")?;
+        let (commit, _, layer) = project.add_manual_detection_region(page, points).await?;
+        project.record_commit(&commit);
+        (commit, page, layer)
+    };
+    let canvas = synchronize_canvas(&desktop, &commit, Some(page)).await?;
+    canvas_channel.channel.publish(canvas);
+    Ok(LayerCommit { revision: commit.revision, layer })
+}
+
+#[tracing::instrument(
+    target = "koharu_metrics",
+    name = "detection_regions_deleted",
+    skip_all,
+    fields(origin = "user", entity_count = regions.len()),
+)]
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn delete_detection_regions(
+    regions: Vec<EntityId>,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<(), Error> {
+    let (commit, page) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let commit = project.delete_detection_regions(regions).await?;
         project.record_commit(&commit);
         (commit, project.active_page())
     };

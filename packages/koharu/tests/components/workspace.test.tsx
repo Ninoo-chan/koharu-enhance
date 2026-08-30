@@ -486,6 +486,7 @@ describe('canvas interaction adapter', () => {
     fireEvent.pointerDown(surface, { button: 0, pointerId: 13, clientX: 30, clientY: 40 })
     fireEvent.pointerUp(surface, { pointerId: 13, clientX: 30, clientY: 40 })
     await waitFor(() => expect(point).toHaveBeenCalledWith({ x: 20, y: 20 }))
+    expect(useKoharuStore.getState().translationFocusLayer).toBe('point-text')
 
     fireEvent.pointerDown(surface, { button: 0, pointerId: 14, clientX: 40, clientY: 50 })
     fireEvent.pointerMove(surface, { pointerId: 14, clientX: 140, clientY: 110 })

@@ -49,6 +49,7 @@ interface KoharuStore {
   fitCanvasRequest: number
   layerFrames: Record<EntityId, Frame>
   selectedLayers: EntityId[]
+  translationFocusLayer: EntityId | null
   selectedPages: EntityId[]
   tool: CanvasTool
   brush: CanvasBrush
@@ -63,6 +64,8 @@ interface KoharuStore {
   setProcessingStages: (stages: Stage[]) => void
   setSettingsOpen: (open: boolean) => void
   selectLayers: (layers: EntityId[]) => void
+  requestTranslationFocus: (layer: EntityId) => void
+  clearTranslationFocus: () => void
   setTool: (tool: CanvasTool) => void
   setBrush: (brush: CanvasBrush) => void
   setShortcut: (action: ShortcutAction, key: string) => void
@@ -97,6 +100,7 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   fitCanvasRequest: 0,
   layerFrames: {},
   selectedLayers: [],
+  translationFocusLayer: null,
   selectedPages: [],
   tool: 'select',
   brush: { diameter: 48, color: '#111111' },
@@ -111,6 +115,8 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   setProcessingStages: (processingStages) => set({ processingStages }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
   selectLayers: (selectedLayers) => set({ selectedLayers: [...new Set(selectedLayers)] }),
+  requestTranslationFocus: (translationFocusLayer) => set({ translationFocusLayer }),
+  clearTranslationFocus: () => set({ translationFocusLayer: null }),
   setTool: (tool) => set({ tool }),
   setBrush: (brush) => set({ brush }),
   setShortcut: (action, key) =>

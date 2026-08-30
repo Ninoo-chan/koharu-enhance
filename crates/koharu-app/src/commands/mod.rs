@@ -81,6 +81,8 @@ pub fn bindings() -> tauri_specta::Builder<tauri::Cef> {
             editing::set_translation,
             editing::set_typography,
             editing::set_geometry,
+            editing::add_manual_detection_region,
+            editing::delete_detection_regions,
             editing::set_visibility,
             editing::delete_layers,
             editing::move_layer,

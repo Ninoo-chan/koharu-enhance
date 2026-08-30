@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use koharu_scene::EntityId;
 
@@ -22,12 +22,6 @@ struct PageWork {
 }
 
 impl PageWork {
-    fn started(&self) -> bool {
-        self.stages
-            .iter()
-            .any(|work| work.state != WorkState::Pending)
-    }
-
     fn finished(&self) -> bool {
         self.stages
             .iter()
@@ -45,12 +39,23 @@ impl PageWork {
     }
 }
 
+/// Signals produced by [`Scheduler::complete_stage`] so the caller can react
+/// to page- and stage-level milestones (dropping cached page data, unloading
+/// a stage's model once every page has finished it).
+#[derive(Default, Clone, Copy, Eq, PartialEq)]
+pub(crate) struct StageProgress {
+    pub(crate) page_finished: bool,
+    pub(crate) stage_finished: bool,
+}
+
+/// Schedules pipeline work one stage at a time: every page finishes a given
+/// stage before any page is allowed to start the next one. This keeps at
+/// most one stage's model resident on the accelerator at a time, instead of
+/// interleaving stages across pages (which requires every stage's model to
+/// stay loaded simultaneously).
 pub(crate) struct Scheduler {
     pages: Vec<PageWork>,
     page_index: BTreeMap<EntityId, usize>,
-    page_window: usize,
-    active_pages: usize,
-    head: usize,
     total: usize,
 }
 
@@ -77,9 +82,6 @@ impl Scheduler {
                 .map(|(index, page)| (page.page, index))
                 .collect(),
             pages,
-            page_window: stages.len().max(1),
-            active_pages: 0,
-            head: 0,
             total,
         }
     }
@@ -88,57 +90,62 @@ impl Scheduler {
         self.total
     }
 
-    pub(crate) fn start_next(
-        &mut self,
-        busy_stages: &BTreeSet<Stage>,
-    ) -> Option<(EntityId, Stage)> {
-        for page_index in self.head..self.pages.len() {
-            let started = self.pages[page_index].started();
-            if !started && self.active_pages >= self.page_window {
-                break;
+    /// Returns the next `(page, stage)` job to run, if any. Stages are
+    /// scanned in pipeline order (stage index 0 first); a stage is only
+    /// considered once every earlier stage has *finished* (not merely
+    /// started) for every page, so two different stages are never both
+    /// in flight at once.
+    pub(crate) fn start_next(&mut self) -> Option<(EntityId, Stage)> {
+        let stage_count = self.pages.first().map_or(0, |page| page.stages.len());
+        for stage_index in 0..stage_count {
+            if stage_index > 0
+                && !self.pages.iter().all(|page| {
+                    page.stages[..stage_index]
+                        .iter()
+                        .all(|work| work.state == WorkState::Finished)
+                })
+            {
+                // An earlier stage is still finishing up (e.g. its last job
+                // is Running). Don't let a later stage jump ahead of it.
+                return None;
             }
-            let stage_index =
-                self.pages[page_index]
-                    .stages
-                    .iter()
-                    .enumerate()
-                    .find_map(|(index, work)| {
-                        (work.state == WorkState::Pending
-                            && !busy_stages.contains(&work.stage)
-                            && self.pages[page_index].ready(index))
-                        .then_some(index)
-                    });
-            let Some(stage_index) = stage_index else {
-                continue;
-            };
-            if !started {
-                self.active_pages += 1;
+            for page_index in 0..self.pages.len() {
+                let stage = self.pages[page_index].stages[stage_index].stage;
+                if self.pages[page_index].stages[stage_index].state == WorkState::Pending
+                    && self.pages[page_index].ready(stage_index)
+                {
+                    self.pages[page_index].stages[stage_index].state = WorkState::Running;
+                    return Some((self.pages[page_index].page, stage));
+                }
             }
-            let page = &mut self.pages[page_index];
-            let work = &mut page.stages[stage_index];
-            work.state = WorkState::Running;
-            return Some((page.page, work.stage));
         }
         None
     }
 
-    pub(crate) fn complete_stage(&mut self, page: EntityId, stage: Stage) -> bool {
+    /// Marks `stage` finished for `page`. Returns which milestones this
+    /// completion crossed: whether `page` has no work left at all, and
+    /// whether `stage` has no work left for *any* page (the signal callers
+    /// use to unload that stage's model before the next stage begins).
+    pub(crate) fn complete_stage(&mut self, page: EntityId, stage: Stage) -> StageProgress {
         let Some(&page_index) = self.page_index.get(&page) else {
-            return false;
+            return StageProgress::default();
         };
-        let page = &mut self.pages[page_index];
-        let was_finished = page.finished();
-        if let Some(work) = page.stages.iter_mut().find(|work| work.stage == stage) {
+        let target = &mut self.pages[page_index];
+        let was_finished = target.finished();
+        if let Some(work) = target.stages.iter_mut().find(|work| work.stage == stage) {
             work.state = WorkState::Finished;
         }
-        let page_finished = !was_finished && page.finished();
-        if page_finished {
-            self.active_pages = self.active_pages.saturating_sub(1);
-            while self.head < self.pages.len() && self.pages[self.head].finished() {
-                self.head += 1;
-            }
+        let page_finished = !was_finished && target.finished();
+        let stage_finished = self.pages.iter().all(|page| {
+            page.stages
+                .iter()
+                .find(|work| work.stage == stage)
+                .is_none_or(|work| work.state == WorkState::Finished)
+        });
+        StageProgress {
+            page_finished,
+            stage_finished,
         }
-        page_finished
     }
 }
 
@@ -159,62 +166,83 @@ mod tests {
     }
 
     #[test]
-    fn starts_pages_in_order_and_models_independently() {
-        let pages = pages(2);
-        let mut scheduler = Scheduler::new(&pages, &Stage::ALL);
-        let mut busy = BTreeSet::new();
+    fn finishes_one_stage_for_every_page_before_the_next_stage_starts() {
+        let pages = pages(3);
+        let stages = [Stage::Detection, Stage::Ocr, Stage::Inpainting];
+        let mut scheduler = Scheduler::new(&pages, &stages);
+        // Detection must run for every page before Ocr is even offered,
+        // even though Detection has no cross-page dependency that would
+        // otherwise force this ordering.
+        for page in &pages {
+            let job = scheduler.start_next().unwrap();
+            assert_eq!(job, (*page, Stage::Detection));
+            let progress = scheduler.complete_stage(*page, Stage::Detection);
+            assert!(!progress.page_finished);
+            assert_eq!(progress.stage_finished, *page == pages[2]);
+        }
 
-        let first = scheduler.start_next(&busy).unwrap();
-        assert_eq!(first, (pages[0], Stage::Detection));
-        busy.insert(Stage::Detection);
-        assert!(scheduler.start_next(&busy).is_none());
+        // Now Ocr is available for every page, in order, and Detection is
+        // never offered again.
+        for page in &pages {
+            let job = scheduler.start_next().unwrap();
+            assert_eq!(job, (*page, Stage::Ocr));
+            scheduler.complete_stage(*page, Stage::Ocr);
+        }
 
-        busy.clear();
-        assert!(!scheduler.complete_stage(pages[0], Stage::Detection));
-        let ocr = scheduler.start_next(&busy).unwrap();
-        busy.insert(ocr.1);
-        let inpainting = scheduler.start_next(&busy).unwrap();
-        busy.insert(inpainting.1);
-        let next_page = scheduler.start_next(&busy).unwrap();
-        busy.insert(next_page.1);
-        assert_eq!(ocr, (pages[0], Stage::Ocr));
-        assert_eq!(inpainting, (pages[0], Stage::Inpainting));
-        assert_eq!(next_page, (pages[1], Stage::Detection));
+        for page in &pages {
+            let job = scheduler.start_next().unwrap();
+            assert_eq!(job, (*page, Stage::Inpainting));
+            let progress = scheduler.complete_stage(*page, Stage::Inpainting);
+            assert!(progress.page_finished);
+        }
 
-        assert!(!scheduler.complete_stage(pages[0], Stage::Ocr));
-        busy.remove(&Stage::Ocr);
-        let translation = scheduler.start_next(&busy).unwrap();
-        assert_eq!(translation, (pages[0], Stage::Translation));
-        assert!(busy.contains(&Stage::Detection));
-        assert!(busy.contains(&Stage::Inpainting));
+        assert!(scheduler.start_next().is_none());
+        assert_eq!(scheduler.total(), pages.len() * stages.len());
     }
 
     #[test]
-    fn sliding_window_backpressures_fast_upstream_models() {
-        let pages = pages(4);
-        let stages = [Stage::Detection, Stage::Ocr, Stage::Inpainting];
+    fn later_stage_waits_for_the_in_flight_job_of_an_earlier_stage() {
+        let pages = pages(2);
+        let stages = [Stage::Detection, Stage::Ocr];
         let mut scheduler = Scheduler::new(&pages, &stages);
-        let mut busy = BTreeSet::new();
+        let first = scheduler.start_next().unwrap();
+        assert_eq!(first, (pages[0], Stage::Detection));
+        // pages[0]'s Detection job is still "Running" (no complete_stage
+        // call yet), so Detection for pages[1] is the only valid next job -
+        // Ocr must not be offered for pages[0] even though its own
+        // prerequisite check would technically allow it once finished.
+        let second = scheduler.start_next().unwrap();
+        assert_eq!(second, (pages[1], Stage::Detection));
+        assert!(scheduler.start_next().is_none());
 
-        assert_eq!(
-            scheduler.start_next(&busy),
-            Some((pages[0], Stage::Detection))
-        );
-        assert!(!scheduler.complete_stage(pages[0], Stage::Detection));
-        let ocr = scheduler.start_next(&busy).unwrap();
-        busy.insert(ocr.1);
-        let inpainting = scheduler.start_next(&busy).unwrap();
-        busy.insert(inpainting.1);
+        let progress = scheduler.complete_stage(pages[0], Stage::Detection);
+        assert!(!progress.stage_finished);
+        // pages[1]'s Detection is still Running, so the Ocr layer is still
+        // blocked.
+        assert!(scheduler.start_next().is_none());
 
-        for page in &pages[1..3] {
-            assert_eq!(scheduler.start_next(&busy), Some((*page, Stage::Detection)));
-            assert!(!scheduler.complete_stage(*page, Stage::Detection));
-        }
-        assert!(scheduler.start_next(&busy).is_none());
+        let progress = scheduler.complete_stage(pages[1], Stage::Detection);
+        assert!(progress.stage_finished);
+        let ocr = scheduler.start_next().unwrap();
+        assert_eq!(ocr, (pages[0], Stage::Ocr));
+    }
 
-        assert!(!scheduler.complete_stage(pages[0], Stage::Ocr));
-        assert!(scheduler.complete_stage(pages[0], Stage::Inpainting));
-        busy.clear();
-        assert_eq!(scheduler.start_next(&busy), Some((pages[1], Stage::Ocr)));
+    #[test]
+    fn single_stage_operation_has_no_layer_barrier() {
+        let pages = pages(2);
+        let stages = [Stage::Translation];
+        let mut scheduler = Scheduler::new(&pages, &stages);
+        let busy = BTreeSet::new();
+
+        let first = scheduler.start_next().unwrap();
+        assert_eq!(first, (pages[0], Stage::Translation));
+        let progress = scheduler.complete_stage(pages[0], Stage::Translation);
+        assert!(progress.page_finished);
+        assert!(!progress.stage_finished);
+
+        let second = scheduler.start_next().unwrap();
+        assert_eq!(second, (pages[1], Stage::Translation));
+        let progress = scheduler.complete_stage(pages[1], Stage::Translation);
+        assert!(progress.stage_finished);
     }
 }

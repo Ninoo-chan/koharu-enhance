@@ -7,12 +7,14 @@ import {
   AlignRight,
   ArrowDown,
   ArrowUp,
+  Bold,
   Brush,
   ChevronDown,
   Eye,
   EyeOff,
   Folder,
   Image as ImageIcon,
+  Italic,
   Layers3,
   Lock,
   Minus,
@@ -20,6 +22,7 @@ import {
   RotateCcw,
   Trash2,
   Type,
+  Underline,
 } from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -99,6 +102,7 @@ const defaultTypography: Typography = {
   preferred_font: null,
   font_weight: 400,
   font_style: 'normal',
+  underline: false,
   size: null,
   auto_fit: true,
   color: [0, 0, 0, 255],
@@ -301,6 +305,93 @@ function TypeInspector() {
                 ))}
               </SelectContent>
             </Select>
+          </InspectorField>
+        </div>
+
+        <div className='flex items-end gap-1.5'>
+          <InspectorField label={t('inspector.weight')}>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='icon-sm'
+                    aria-label={t('inspector.fontWeight')}
+                    aria-pressed={weight >= 600}
+                    disabled={disabled}
+                    data-active={weight >= 600}
+                    className='data-[active=true]:border-primary data-[active=true]:bg-accent data-[active=true]:text-accent-foreground'
+                    onClick={() => {
+                      const nextWeight = weight >= 600 ? 400 : nearestFontWeight(weights, 700)
+                      apply((value) => ({ ...value, font_weight: nextWeight }))
+                    }}
+                  />
+                }
+              >
+                <Bold className='size-3.5' />
+              </TooltipTrigger>
+              <TooltipContent>{t('inspector.fontWeight')}</TooltipContent>
+            </Tooltip>
+          </InspectorField>
+          <InspectorField label={t('inspector.style')}>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='icon-sm'
+                    aria-label={t('inspector.fontStyle')}
+                    aria-pressed={style === 'italic' || style === 'oblique'}
+                    disabled={disabled}
+                    data-active={style === 'italic' || style === 'oblique'}
+                    className='data-[active=true]:border-primary data-[active=true]:bg-accent data-[active=true]:text-accent-foreground'
+                    onClick={() => {
+                      const active = style === 'italic' || style === 'oblique'
+                      const nextStyle = active
+                        ? 'normal'
+                        : styles.includes('italic')
+                          ? 'italic'
+                          : styles.includes('oblique')
+                            ? 'oblique'
+                            : 'normal'
+                      const nextWeights = usableFontWeights(selectedFamily, nextStyle)
+                      apply((value) => ({
+                        ...value,
+                        font_style: nextStyle,
+                        font_weight: nearestFontWeight(nextWeights, weight),
+                      }))
+                    }}
+                  />
+                }
+              >
+                <Italic className='size-3.5' />
+              </TooltipTrigger>
+              <TooltipContent>{t('inspector.fontStyle')}</TooltipContent>
+            </Tooltip>
+          </InspectorField>
+          <InspectorField label={t('inspector.underline')}>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='icon-sm'
+                    aria-label={t('inspector.underline')}
+                    aria-pressed={typography.underline}
+                    disabled={disabled}
+                    data-active={typography.underline}
+                    className='data-[active=true]:border-primary data-[active=true]:bg-accent data-[active=true]:text-accent-foreground'
+                    onClick={() => apply((value) => ({ ...value, underline: !value.underline }))}
+                  />
+                }
+              >
+                <Underline className='size-3.5' />
+              </TooltipTrigger>
+              <TooltipContent>{t('inspector.underline')}</TooltipContent>
+            </Tooltip>
           </InspectorField>
         </div>
 
@@ -741,6 +832,8 @@ function LayerRow({
 
 function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void }) {
   const { t } = useTranslation()
+  const translationFocusLayer = useKoharuStore((state) => state.translationFocusLayer)
+  const clearTranslationFocus = useKoharuStore((state) => state.clearTranslationFocus)
   const name = localizedLayerName(layer, 0, t)
   const [opacity, setOpacity] = useState(layer.visibility.opacity * 100)
 
@@ -862,6 +955,10 @@ function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void 
             <CommitTextarea
               data-testid={`edit-translation-${layer.id}`}
               aria-label={t('layers.translationLabel', { name })}
+              autoFocus={translationFocusLayer === layer.id}
+              onFocus={() => {
+                if (translationFocusLayer === layer.id) clearTranslationFocus()
+              }}
               wrap='soft'
               className='max-h-16 min-h-9 w-full max-w-full min-w-0 resize-y overflow-y-auto rounded-md border-primary/25 bg-background px-1.5 py-1 text-[12px] leading-4 md:text-[12px]'
               value={layer.content.translation?.text ?? ''}
