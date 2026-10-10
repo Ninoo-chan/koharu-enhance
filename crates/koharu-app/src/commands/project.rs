@@ -517,6 +517,7 @@ impl Project {
                 &SceneTextLayout {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
+                    angle_degrees: None,
                 },
             )?;
             edit.relate::<koharu_scene::RecognizedFrom>(content, added_region)?;
