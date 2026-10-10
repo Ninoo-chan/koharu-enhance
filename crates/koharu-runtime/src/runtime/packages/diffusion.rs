@@ -6,39 +6,38 @@ use strum::EnumProperty;
 use crate::{
     Hardware, Store, download,
     runtime::{
-        DiscoverablePackage, Package, RuntimePackage,
-        graph::Component,
-        loader,
-        packages::{Cuda, Rocm},
+        DiscoverablePackage, Package, RuntimePackage, graph::Component, loader, packages::Cuda,
         sealed,
     },
     source::extract,
 };
 
-const RELEASE: &str = "stable-diffusion.cpp-master-827-97d2990";
+const RELEASE: &str = "master-929-3f8527a.3";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, strum::Display, strum::EnumProperty)]
 pub(crate) enum Diffusion {
     #[strum(
         serialize = "windows-cuda",
         props(
-            asset = "stable-diffusion-cuda-windows-2022.tar.gz",
+            asset = "x86_64-pc-windows-msvc-cuda.tar.gz",
             library = "stable-diffusion.dll"
         )
     )]
     WindowsCuda,
-    #[strum(
-        serialize = "linux-cuda",
-        props(
-            asset = "stable-diffusion-cuda-ubuntu-latest.tar.gz",
-            library = "libstable-diffusion.so"
-        )
+    #[cfg_attr(
+        all(target_os = "linux", target_arch = "aarch64"),
+        strum(props(asset = "aarch64-unknown-linux-gnu-cuda.tar.gz"))
     )]
+    #[cfg_attr(
+        not(all(target_os = "linux", target_arch = "aarch64")),
+        strum(props(asset = "x86_64-unknown-linux-gnu-cuda.tar.gz"))
+    )]
+    #[strum(serialize = "linux-cuda", props(library = "libstable-diffusion.so"))]
     LinuxCuda,
     #[strum(
         serialize = "windows-hip",
         props(
-            asset = "stable-diffusion-hip-windows-2022.tar.gz",
+            asset = "x86_64-pc-windows-msvc-hip.tar.gz",
             library = "stable-diffusion.dll"
         )
     )]
@@ -46,7 +45,7 @@ pub(crate) enum Diffusion {
     #[strum(
         serialize = "linux-hip",
         props(
-            asset = "stable-diffusion-hip-ubuntu-latest.tar.gz",
+            asset = "x86_64-unknown-linux-gnu-hip.tar.gz",
             library = "libstable-diffusion.so"
         )
     )]
@@ -54,7 +53,7 @@ pub(crate) enum Diffusion {
     #[strum(
         serialize = "windows-vulkan",
         props(
-            asset = "stable-diffusion-vulkan-windows-2022.tar.gz",
+            asset = "x86_64-pc-windows-msvc-vulkan.tar.gz",
             library = "stable-diffusion.dll"
         )
     )]
@@ -62,7 +61,7 @@ pub(crate) enum Diffusion {
     #[strum(
         serialize = "linux-vulkan",
         props(
-            asset = "stable-diffusion-vulkan-ubuntu-latest.tar.gz",
+            asset = "x86_64-unknown-linux-gnu-vulkan.tar.gz",
             library = "libstable-diffusion.so"
         )
     )]
@@ -70,7 +69,7 @@ pub(crate) enum Diffusion {
     #[strum(
         serialize = "macos-metal",
         props(
-            asset = "stable-diffusion-metal-macos-latest.tar.gz",
+            asset = "aarch64-apple-darwin-metal.tar.gz",
             library = "libstable-diffusion.dylib"
         )
     )]
@@ -107,7 +106,7 @@ impl Package for Diffusion {
             move |stage| async move {
                 let asset = self.asset();
                 let url = format!(
-                    "https://github.com/mayocream/koharu/releases/download/{RELEASE}/{asset}"
+                    "https://github.com/koharu-rs/diffusion/releases/download/{RELEASE}/{asset}"
                 );
                 let archive = tempfile::Builder::new().suffix(".tar.gz").tempfile()?;
                 download::fetch(&url, archive.path()).await?;
@@ -128,7 +127,7 @@ impl DiscoverablePackage for Diffusion {
             if hardware.supports_cuda() {
                 return Some(Self::WindowsCuda);
             }
-            if Rocm::discover(hardware).is_ok() {
+            if hardware.supports_rocm() {
                 return Some(Self::WindowsHip);
             }
             if hardware.supports_vulkan() {
@@ -143,6 +142,8 @@ impl DiscoverablePackage for Diffusion {
                 return Some(Self::LinuxHip);
             }
             hardware.supports_vulkan().then_some(Self::LinuxVulkan)
+        } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+            hardware.supports_cuda().then_some(Self::LinuxCuda)
         } else if hardware.supports_metal() {
             Some(Self::MacosMetal)
         } else {
@@ -160,9 +161,7 @@ impl RuntimePackage for Diffusion {
                 Component::Cuda(Cuda::Runtime13),
                 Component::Cuda(Cuda::Blas13),
             ]),
-            Self::WindowsHip | Self::LinuxHip => {
-                Ok(vec![Component::Rocm(Rocm::discover(hardware)?)])
-            }
+            Self::WindowsHip | Self::LinuxHip => Ok(vec![Component::Rocm(hardware.rocm_target()?)]),
             Self::WindowsVulkan | Self::LinuxVulkan | Self::MacosMetal => Ok(Vec::new()),
         }
     }

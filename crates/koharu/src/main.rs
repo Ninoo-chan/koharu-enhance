@@ -1,5 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+mod mallinfo;
+
 use clap::Parser as _;
 use koharu::panic;
 use koharu::sentry;
@@ -11,7 +14,7 @@ use tracing_subscriber::{Layer as _, filter::filter_fn, layer::SubscriberExt as 
 struct Cli {}
 
 #[tokio::main]
-#[tauri::cef_entry_point]
+#[tauri_runtime_cef::cef_entry_point]
 async fn main() {
     #[cfg(target_os = "windows")]
     {
