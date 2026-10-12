@@ -261,7 +261,10 @@
     "selectAllLayers": "Selecionar todas as camadas",
     "settings": "Configurações",
     "undo": "Desfazer",
-    "view": "Exibir"
+    "view": "Exibir",
+    "text": "Texto",
+    "importText": "Importar CSV…",
+    "exportText": "Exportar CSV…"
   },
   "model": {
     "baseUrl": "URL base",

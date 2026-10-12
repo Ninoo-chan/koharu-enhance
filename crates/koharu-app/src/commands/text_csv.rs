@@ -1,6 +1,4 @@
-use std::collections::HashMap;
-
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 use koharu_desktop::Desktop;
 use koharu_scene::{
     Authored, EntityId, LanguageTag, Origin, Snapshot, SourceText as SceneSourceText, TextRole,
@@ -99,11 +97,14 @@ fn parse_optional(fields: &[String], index: usize) -> Option<String> {
 pub fn encode_text_csv(rows: &[TextRow]) -> Vec<u8> {
     let mut document = String::from(CSV_HEADER);
     for row in rows {
+        let page_id = row.page_id.to_string();
+        let layer_id = row.layer_id.to_string();
+        let content_id = row.content_id.to_string();
         let fields = [
-            Some(row.page_id.to_string().as_str()),
+            Some(page_id.as_str()),
             Some(row.page_label.as_str()),
-            Some(row.layer_id.to_string().as_str()),
-            Some(row.content_id.to_string().as_str()),
+            Some(layer_id.as_str()),
+            Some(content_id.as_str()),
             row.role.as_deref(),
             row.original_text.as_deref(),
             row.original_language.as_deref(),
@@ -133,28 +134,6 @@ pub fn encode_text_csv(rows: &[TextRow]) -> Vec<u8> {
 pub fn decode_text_csv(bytes: &[u8], snapshot: &Snapshot) -> Result<Vec<TextCsvEntry>> {
     let text = String::from_utf8_lossy(bytes);
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-
-    let mut pages_by_label: HashMap<&str, Vec<EntityId>> = HashMap::new();
-    let mut layers_by_page: HashMap<EntityId, Vec<(EntityId, Option<String>)>> = HashMap::new();
-    for page in snapshot.pages() {
-        let id = page.id();
-        let label = page.page()?.label;
-        pages_by_label
-            .entry(label.as_str())
-            .or_default()
-            .push(id);
-        let mut layers = Vec::new();
-        if let Some(group) = page.text_group()? {
-            for layer in group.text_layers()? {
-                let source = layer
-                    .content()?
-                    .source()?
-                    .map(|source| source.text.value);
-                layers.push((layer.id(), source));
-            }
-        }
-        layers_by_page.insert(id, layers);
-    }
 
     let mut entries = Vec::new();
     for line in text.lines() {
@@ -321,7 +300,7 @@ async fn apply_entry(project: &mut Project, entry: TextCsvEntry) -> Result<Optio
         }
         Ok(())
     })?;
-    Ok(Some(project.commit_rebased(patch).await?))
+    Ok(project.commit_rebased(patch).await?)
 }
 
 #[tracing::instrument(
@@ -343,7 +322,7 @@ pub(crate) async fn export_text_csv(
     };
     let rows = collect_rows(&snapshot)?;
     if rows.is_empty() {
-        bail!("there are no text layers to export");
+        return Err(Error(anyhow::anyhow!("there are no text layers to export")));
     }
     let csv = encode_text_csv(&rows);
     let destination = rfd::AsyncFileDialog::new()
