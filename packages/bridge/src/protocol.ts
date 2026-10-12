@@ -78,6 +78,8 @@ export const commands = {
 	commitErase: (expectedRevision: Revision, layer: EntityId, points: Point[], diameter: number) => __TAURI_INVOKE<LayerCommit>("commit_erase", { expectedRevision, layer, points: points.map(i=>i), diameter }),
 	commitTransform: (expectedRevision: Revision, elements: TransformFrame[]) => __TAURI_INVOKE<number | null>("commit_transform", { expectedRevision, elements }).then((v) => (v==null?v:v as typeof v)),
 	commitInpaint: (expectedRevision: Revision, points: Point[], diameter: number) => __TAURI_INVOKE<string | null>("commit_inpaint", { expectedRevision, points: points.map(i=>i), diameter }),
+	exportTextCsv: () => __TAURI_INVOKE<null>("export_text_csv"),
+	importTextCsv: () => __TAURI_INVOKE<TextCsvImportSummary>("import_text_csv"),
 };
 
 /* Types */
@@ -493,6 +495,11 @@ export type TextContent = {
 };
 
 export type TextLayoutKind = "point" | "paragraph";
+
+export type TextCsvImportSummary = {
+	skipped: number,
+	updated: number,
+};
 
 export type ThumbnailBytes = number[];
 
