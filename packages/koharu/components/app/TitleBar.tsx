@@ -57,6 +57,17 @@ export function TitleBar() {
     commands.export,
     'menu.export',
   )
+  const { run: exportTextCsv, busy: exportingText } = useCommand(
+    ['export-text-csv'],
+    commands.exportTextCsv,
+    'menu.exportText',
+  )
+  const { run: importTextCsv, busy: importingText } = useCommand(
+    ['import-text-csv'],
+    commands.importTextCsv,
+    'menu.importText',
+    () => refresh(projectKey, pagesKey, pageKey),
+  )
 
   const run = (scope: Scope, operation: Operation = { operation: 'full' }) =>
     void call(commands.process, scope, operation).catch(() => undefined)

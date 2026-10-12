@@ -39,6 +39,12 @@ macro_rules! entity_id {
                 self.0.fmt(formatter)
             }
         }
+
+        impl From<Uuid> for $name {
+            fn from(value: Uuid) -> Self {
+                Self(value)
+            }
+        }
     };
 }
 

@@ -8,6 +8,7 @@ pub(crate) mod output;
 pub(crate) mod preferences;
 pub(crate) mod processing;
 pub(crate) mod project;
+pub(crate) mod text_csv;
 
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -108,6 +109,8 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             canvas::commit_erase,
             canvas::commit_transform,
             canvas::commit_inpaint,
+            text_csv::export_text_csv,
+            text_csv::import_text_csv,
         ])
         .disable_serde_phases()
         .error_handling(ErrorHandlingMode::Throw)
