@@ -43,6 +43,41 @@ impl StageProcessor for Processor {
         }
     }
 
+    /// Re-run OCR for a page when it has no text layers at all (e.g. they
+    /// were deleted manually), or when any existing text layer still has an
+    /// empty original text. Layers whose original text was authored by the
+    /// user are never considered missing, so a fully hand-written page is
+    /// skipped.
+    fn skip(&self, input: &StageInput) -> Result<bool> {
+        let mut saw_text_layer = false;
+        for entity in input.scene.descendants(input.page)? {
+            let region = entity.id();
+            if !input.contains_entity(region)? {
+                continue;
+            }
+            let is_text_region = entity
+                .component::<Region>()?
+                .is_some_and(|value| value.kind == TextRegion::kind());
+            if !is_text_region {
+                continue;
+            }
+            for relation in input.scene.relations_to_as::<RecognizedFrom>(region) {
+                saw_text_layer = true;
+                let content = relation.value().source;
+                let source = input.scene.component::<SourceText>(content)?;
+                let user_authored = source.as_ref().is_some_and(|value| {
+                    matches!(value.text.origin, Origin::User)
+                        && !value.text.value.trim().is_empty()
+                });
+                if !user_authored {
+                    // Missing or empty original text: OCR must run.
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(saw_text_layer)
+    }
+
     fn unload(&self) -> bool {
         self.model.unload()
     }

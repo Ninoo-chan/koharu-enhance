@@ -1,6 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use koharu_scene::{Authored, LanguageTag, Origin, SourceText, Translation};
+use koharu_scene::{Authored, EntityOrigin, LanguageTag, Origin, SourceText, Translation};
 use koharu_translator::{TranslationRequest, Translator};
 
 use crate::TranslationConfig;
@@ -45,10 +45,32 @@ impl StageProcessor for Processor {
                 let Some(source) = content.source()? else {
                     continue;
                 };
-                if !source.text.value.trim().is_empty() {
-                    targets.push((content.id(), source.text.value));
+                if source.text.value.trim().is_empty() {
+                    continue;
                 }
+                // Skip layers that already have a translation, unless the
+                // translated text was cleared (e.g. deleted by the user), in
+                // which case it gets retranslated. Entities promoted to User
+                // ownership are always preserved.
+                let user_owned = input
+                    .scene
+                    .component::<EntityOrigin>(content.id())?
+                    .is_some_and(|value| matches!(value.origin, Origin::User));
+                if user_owned {
+                    continue;
+                }
+                if input
+                    .scene
+                    .component::<Translation>(content.id())?
+                    .is_some_and(|value| !value.text.value.trim().is_empty())
+                {
+                    continue;
+                }
+                targets.push((content.id(), source.text.value));
             }
+        }
+        if targets.is_empty() {
+            return finish(input.scene.edit_as(generation(PRODUCER, self.model())?));
         }
         let mut request = TranslationRequest::new(
             targets.iter().map(|(_, source)| source.clone()),

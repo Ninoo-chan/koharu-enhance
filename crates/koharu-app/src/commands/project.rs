@@ -4,12 +4,14 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use koharu_desktop::Frame;
 use koharu_scene::{
-    AssetInput, AssetMetadata, AssetRole, At, Authored, Commit, EntityId, EntityOrigin,
-    Geometry as SceneGeometry, Group as SceneGroup, Origin, PageDraft, Point as ScenePoint,
-    Presents, RasterLayer as SceneRasterLayer, RasterLayerKind, Region as SceneRegion,
-    RemovePolicy, Revision, Session, Snapshot, SourceText as SceneSourceText,
-    TextGroup as SceneTextGroup, TextLayout as SceneTextLayout, TextLayoutKind,
-    Translation as SceneTranslation, Typography as SceneTypography, Visibility as SceneVisibility,
+    AssetInput, AssetMetadata, AssetRole, At, Authored, Commit, EntityId,
+    EntityOrigin, Geometry as SceneGeometry, Group as SceneGroup, Inside, Origin, PageDraft,
+    BubbleRegion, PanelRegion, Point as ScenePoint, Presents, RelationId,
+    RasterLayer as SceneRasterLayer, RasterLayerKind,
+    Region as SceneRegion, RegionSpec, RemovePolicy, Revision, Session, Snapshot,
+    SourceText as SceneSourceText, TextGroup as SceneTextGroup, TextLayout as SceneTextLayout,
+    TextLayoutKind, TextRegion, Translation as SceneTranslation, Typography as SceneTypography,
+    Visibility as SceneVisibility,
 };
 use serde::Serialize;
 use specta::Type;
@@ -473,11 +475,105 @@ impl Project {
         ))
     }
 
-    pub(crate) async fn add_manual_detection_region(
+    pub(crate) async fn add_manual_panel_region(
+        &mut self,
+        page: EntityId,
+        points: Vec<Point>,
+    ) -> Result<(Commit, EntityId)> {
+        let geometry = self.manual_region_geometry(page, &points)?;
+        let snapshot = self.snapshot();
+        for entity in snapshot.descendants(page)? {
+            let Some(region) = snapshot.component::<SceneRegion>(entity.id())? else {
+                continue;
+            };
+            if region.kind != PanelRegion::kind() {
+                continue;
+            }
+            let Some(existing) = snapshot.component::<SceneGeometry>(entity.id())? else {
+                continue;
+            };
+            if polygons_touch_or_overlap(&geometry.points, &existing.points) {
+                bail!("panels cannot touch or overlap each other");
+            }
+        }
+        let mut region = None;
+        let patch = snapshot.patch(|edit| {
+            region = Some(edit.add_analysis_region::<PanelRegion>(
+                page,
+                At::End,
+                &geometry,
+                Some("Manual panel".to_owned()),
+            )?);
+            Ok(())
+        })?;
+        Ok((
+            self.commit(patch).await?,
+            region.expect("manual panel region was added"),
+        ))
+    }
+
+    pub(crate) async fn add_manual_text_region(
         &mut self,
         page: EntityId,
         points: Vec<Point>,
     ) -> Result<(Commit, EntityId, EntityId)> {
+        let geometry = self.manual_region_geometry(page, &points)?;
+        let snapshot = self.snapshot();
+        let mut containers: Vec<(EntityId, usize)> = Vec::new();
+        for entity in snapshot.descendants(page)? {
+            let Some(region) = snapshot.component::<SceneRegion>(entity.id())? else {
+                continue;
+            };
+            if region.kind != BubbleRegion::kind() && region.kind != PanelRegion::kind() {
+                continue;
+            }
+            let Some(existing) = snapshot.component::<SceneGeometry>(entity.id())? else {
+                continue;
+            };
+            if polygons_contain(&existing.points, &geometry.points) {
+                containers.push((entity.id(), existing.points.len()));
+            }
+        }
+        if containers.is_empty() {
+            bail!("text regions must be drawn inside a panel or bubble detection");
+        }
+        containers.sort_by_key(|(id, vertices)| (*vertices, *id));
+        let container = containers.first().expect("a container was found").0;
+        let mut region = None;
+        let mut layer = None;
+        let patch = snapshot.patch(|edit| {
+            let added_region = edit.add_analysis_region::<TextRegion>(
+                page,
+                At::End,
+                &geometry,
+                Some("Manual text region".to_owned()),
+            )?;
+            let content = edit.add_text_content(page, At::End)?;
+            let added_layer = edit.add_text_layer(
+                page,
+                At::End,
+                content,
+                &SceneTextLayout {
+                    origin: Origin::User,
+                    kind: TextLayoutKind::Paragraph,
+                    angle_degrees: None,
+                },
+            )?;
+            edit.relate::<koharu_scene::RecognizedFrom>(content, added_region)?;
+            edit.relate::<koharu_scene::FitsTo>(added_layer, added_region)?;
+            edit.relate::<Inside>(added_region, container)?;
+            region = Some(added_region);
+            layer = Some(added_layer);
+            Ok(())
+        })?;
+        Ok((
+            self.commit(patch).await?,
+            region.expect("manual text region was added"),
+            layer.expect("manual text layer was added"),
+        ))
+    }
+
+    fn manual_region_geometry(&self, page: EntityId, points: &[Point]) -> Result<SceneGeometry> {
         if points.len() < 3
             || points.len() > 4096
             || points
@@ -506,50 +602,7 @@ impl Project {
         if !polygon_is_simple(&geometry.points) {
             bail!("manual detection region must be a simple polygon");
         }
-        for entity in snapshot.descendants(page)? {
-            if snapshot
-                .component::<SceneRegion>(entity.id())?
-                .is_some()
-                && snapshot
-                    .component::<SceneGeometry>(entity.id())?
-                    .is_some_and(|existing| {
-                        polygons_touch_or_overlap(&geometry.points, &existing.points)
-                    })
-            {
-                bail!("manual detection region touches or overlaps an existing region");
-            }
-        }
-        let mut region = None;
-        let mut layer = None;
-        let patch = snapshot.patch(|edit| {
-            let added_region = edit.add_analysis_region::<koharu_scene::TextRegion>(
-                page,
-                At::End,
-                &geometry,
-                Some("Manual text region".to_owned()),
-            )?;
-            let content = edit.add_text_content(page, At::End)?;
-            let added_layer = edit.add_text_layer(
-                page,
-                At::End,
-                content,
-                &SceneTextLayout {
-                    origin: Origin::User,
-                    kind: TextLayoutKind::Paragraph,
-                    angle_degrees: None,
-                },
-            )?;
-            edit.relate::<koharu_scene::RecognizedFrom>(content, added_region)?;
-            edit.relate::<koharu_scene::FitsTo>(added_layer, added_region)?;
-            region = Some(added_region);
-            layer = Some(added_layer);
-            Ok(())
-        })?;
-        Ok((
-            self.commit(patch).await?,
-            region.expect("manual detection region was added"),
-            layer.expect("manual detection layer was added"),
-        ))
+        Ok(geometry)
     }
 
     pub(crate) async fn delete_detection_regions(
