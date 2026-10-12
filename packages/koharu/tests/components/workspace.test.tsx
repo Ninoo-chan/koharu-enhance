@@ -502,4 +502,58 @@ describe('canvas interaction adapter', () => {
       angle_degrees: 0,
     })
   })
+
+  it('draws a manual detection region and blocks overlap with existing regions', async () => {
+    installProject()
+    useKoharuStore.setState({
+      tool: 'detection',
+      camera: { zoom: 1, translation: [0, 0], fitted: false },
+    })
+    const addRegion = vi
+      .spyOn(commands, 'addManualDetectionRegion')
+      .mockResolvedValue({ revision: 2, region: 'manual-region', layer: 'manual-layer' })
+    const surface = renderWorkspace()
+
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 20, clientX: 20, clientY: 30 })
+    fireEvent.pointerMove(surface, { pointerId: 20, clientX: 50, clientY: 30 })
+    fireEvent.pointerMove(surface, { pointerId: 20, clientX: 50, clientY: 60 })
+    fireEvent.pointerUp(surface, { pointerId: 20, clientX: 20, clientY: 60 })
+
+    await waitFor(() => expect(addRegion).toHaveBeenCalledOnce())
+    expect(addRegion).toHaveBeenCalledWith([
+      { x: 10, y: 10 },
+      { x: 40, y: 10 },
+      { x: 40, y: 40 },
+      { x: 10, y: 40 },
+    ])
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['manual-layer'])
+
+    addRegion.mockClear()
+    queryClient.setQueryData(pageKey, (page: { regions: unknown[] }) => ({
+      ...page,
+      regions: [
+        {
+          id: 'existing-region',
+          parent: 'page',
+          geometry: {
+            points: [
+              { x: 50, y: 50 },
+              { x: 80, y: 50 },
+              { x: 80, y: 80 },
+              { x: 50, y: 80 },
+            ],
+          },
+          kind: 'dev.koharu.region.text',
+          label: null,
+        },
+      ],
+    }))
+
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 21, clientX: 50, clientY: 90 })
+    fireEvent.pointerMove(surface, { pointerId: 21, clientX: 70, clientY: 90 })
+    fireEvent.pointerMove(surface, { pointerId: 21, clientX: 70, clientY: 110 })
+    fireEvent.pointerUp(surface, { pointerId: 21, clientX: 50, clientY: 110 })
+
+    expect(addRegion).not.toHaveBeenCalled()
+  })
 })

@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { resizeFrame, rotateFrame } from '@/lib/geometry'
-import type { Frame } from '@koharu/bridge/protocol'
+import {
+  pointInPolygon,
+  isSimplePolygon,
+  polygonsTouchOrOverlap,
+  resizeFrame,
+  rotateFrame,
+} from '@/lib/geometry'
+import type { Frame, Point } from '@koharu/bridge/protocol'
 
 const frame: Frame = { x: 10, y: 20, width: 100, height: 50, angle_degrees: 0 }
 
@@ -33,5 +39,50 @@ describe('selection control geometry', () => {
       ...frame,
       angle_degrees: 90,
     })
+  })
+})
+
+describe('manual detection polygon geometry', () => {
+  const square = (x: number, y: number, size: number): Point[] => [
+    { x, y },
+    { x: x + size, y },
+    { x: x + size, y: y + size },
+    { x, y: y + size },
+  ]
+
+  it('recognizes points inside and on the boundary', () => {
+    const polygon = square(0, 0, 10)
+    expect(pointInPolygon({ x: 5, y: 5 }, polygon)).toBe(true)
+    expect(pointInPolygon({ x: 10, y: 5 }, polygon)).toBe(true)
+    expect(pointInPolygon({ x: 12, y: 5 }, polygon)).toBe(false)
+  })
+
+  it('rejects intersecting, containing, and touching regions', () => {
+    expect(polygonsTouchOrOverlap(square(0, 0, 10), square(9, 2, 5))).toBe(true)
+    expect(polygonsTouchOrOverlap(square(0, 0, 10), square(2, 2, 2))).toBe(true)
+    expect(polygonsTouchOrOverlap(square(0, 0, 10), square(10, 2, 5))).toBe(true)
+  })
+
+  it('allows disjoint regions', () => {
+    expect(polygonsTouchOrOverlap(square(0, 0, 10), square(12, 0, 4))).toBe(false)
+  })
+
+  it('rejects self-crossing and degenerate lasso shapes', () => {
+    expect(
+      isSimplePolygon([
+        { x: 0, y: 0 },
+        { x: 10, y: 10 },
+        { x: 0, y: 10 },
+        { x: 10, y: 0 },
+      ]),
+    ).toBe(false)
+    expect(isSimplePolygon(square(0, 0, 10))).toBe(true)
+    expect(
+      isSimplePolygon([
+        { x: 0, y: 0 },
+        { x: 5, y: 0 },
+        { x: 10, y: 0 },
+      ]),
+    ).toBe(false)
   })
 })

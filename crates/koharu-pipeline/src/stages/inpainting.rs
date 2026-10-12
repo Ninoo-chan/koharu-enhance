@@ -20,6 +20,7 @@ use koharu_ml::{
 use koharu_scene::{
     AssetInput, AssetMetadata, AssetRole, At, BubbleRegion, EntityOrigin, Geometry, Origin,
     RasterLayer, RasterLayerKind, Region, RegionSpec,
+    TextRegion,
 };
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -105,6 +106,19 @@ impl StageProcessor for Processor {
     fn skip(&self, input: &StageInput) -> Result<bool> {
         if input.inpainting_mask.is_some() {
             return Ok(false);
+        }
+        for entity in input.scene.descendants(input.page)? {
+            let id = entity.id();
+            if input.contains_entity(id)?
+                && input
+                    .scene
+                    .component::<Region>(id)?
+                    .is_some_and(|region| {
+                        region.kind == TextRegion::kind() && matches!(region.origin, Origin::User)
+                    })
+            {
+                return Ok(false);
+            }
         }
         let source = AssetRole::new("source")?;
         for entity in input.scene.children(input.page)? {
@@ -504,6 +518,9 @@ async fn prepare(input: &StageInput) -> Result<InpaintInput> {
             }
         }
     }
+    if input.inpainting_mask.is_none() {
+        include_manual_text_regions(input, &mut mask, &mut text_mask)?;
+    }
     let flat_fill_regions = flat_fill_regions(input, source.width(), source.height())?;
     Ok(InpaintInput {
         image: source,
@@ -514,6 +531,69 @@ async fn prepare(input: &StageInput) -> Result<InpaintInput> {
         text_mask,
         flat_fill_regions,
     })
+}
+
+fn include_manual_text_regions(
+    input: &StageInput,
+    mask: &mut GrayImage,
+    text_mask: &mut GrayImage,
+) -> Result<()> {
+    for entity in input.scene.descendants(input.page)? {
+        let id = entity.id();
+        let Some(region) = input.scene.component::<Region>(id)? else {
+            continue;
+        };
+        if !matches!(region.origin, Origin::User)
+            || region.kind != TextRegion::kind()
+            || !input.contains_entity(id)?
+        {
+            continue;
+        }
+        let Some(geometry) = input.scene.component::<Geometry>(id)? else {
+            continue;
+        };
+        let polygon = geometry
+            .points
+            .iter()
+            .map(|point| (point.x as f32, point.y as f32))
+            .collect::<Vec<_>>();
+        if polygon.len() < 3 {
+            continue;
+        }
+        let left = polygon
+            .iter()
+            .map(|point| point.0)
+            .fold(f32::INFINITY, f32::min)
+            .floor()
+            .clamp(0.0, mask.width() as f32) as u32;
+        let top = polygon
+            .iter()
+            .map(|point| point.1)
+            .fold(f32::INFINITY, f32::min)
+            .floor()
+            .clamp(0.0, mask.height() as f32) as u32;
+        let right = polygon
+            .iter()
+            .map(|point| point.0)
+            .fold(f32::NEG_INFINITY, f32::max)
+            .ceil()
+            .clamp(0.0, mask.width() as f32) as u32;
+        let bottom = polygon
+            .iter()
+            .map(|point| point.1)
+            .fold(f32::NEG_INFINITY, f32::max)
+            .ceil()
+            .clamp(0.0, mask.height() as f32) as u32;
+        for y in top..bottom {
+            for x in left..right {
+                if point_in_polygon((x as f32 + 0.5, y as f32 + 0.5), &polygon) {
+                    mask.put_pixel(x, y, Luma([u8::MAX]));
+                    text_mask.put_pixel(x, y, Luma([u8::MAX]));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 const TILE_SIZE: u32 = 512;

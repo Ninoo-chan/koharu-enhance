@@ -478,10 +478,24 @@ impl Project {
         page: EntityId,
         points: Vec<Point>,
     ) -> Result<(Commit, EntityId, EntityId)> {
-        if points.len() < 3 || points.iter().any(|point| !point.x.is_finite() || !point.y.is_finite()) {
+        if points.len() < 3
+            || points.len() > 4096
+            || points
+                .iter()
+                .any(|point| !point.x.is_finite() || !point.y.is_finite())
+        {
             bail!("manual detection region must contain finite polygon points");
         }
         let snapshot = self.snapshot();
+        let page_size = snapshot.page(page)?.page()?;
+        if points.iter().any(|point| {
+            point.x < 0.0
+                || point.y < 0.0
+                || point.x > page_size.width
+                || point.y > page_size.height
+        }) {
+            bail!("manual detection region must stay inside the page");
+        }
         let geometry = SceneGeometry {
             origin: Origin::User,
             points: points
@@ -489,15 +503,20 @@ impl Project {
                 .map(|point| ScenePoint { x: point.x, y: point.y })
                 .collect(),
         };
+        if !polygon_is_simple(&geometry.points) {
+            bail!("manual detection region must be a simple polygon");
+        }
         for entity in snapshot.descendants(page)? {
             if snapshot
                 .component::<SceneRegion>(entity.id())?
                 .is_some()
                 && snapshot
                     .component::<SceneGeometry>(entity.id())?
-                    .is_some_and(|existing| polygons_touch_or_overlap(&geometry.points, &existing.points))
+                    .is_some_and(|existing| {
+                        polygons_touch_or_overlap(&geometry.points, &existing.points)
+                    })
             {
-                bail!("manual detection region overlaps an existing text region");
+                bail!("manual detection region touches or overlaps an existing region");
             }
         }
         let mut region = None;
@@ -533,13 +552,36 @@ impl Project {
         ))
     }
 
-    pub(crate) async fn delete_detection_regions(&mut self, regions: Vec<EntityId>) -> Result<Commit> {
+    pub(crate) async fn delete_detection_regions(
+        &mut self,
+        regions: Vec<EntityId>,
+    ) -> Result<Commit> {
         let snapshot = self.snapshot();
+        let mut remove = Vec::new();
+        for region in regions {
+            if snapshot.component::<SceneRegion>(region)?.is_none() {
+                continue;
+            }
+            remove.push(region);
+            for recognized in snapshot.relations_to_as::<koharu_scene::RecognizedFrom>(region) {
+                let content = recognized.value().source;
+                for presentation in snapshot.relations_to_as::<Presents>(content) {
+                    remove.push(presentation.value().source);
+                }
+                remove.push(content);
+            }
+        }
+        let mut unique = Vec::new();
+        for entity in remove {
+            if !unique.contains(&entity) {
+                unique.push(entity);
+            }
+        }
         let patch = snapshot.patch(|edit| {
-            for region in regions.iter().copied() {
-                if snapshot.component::<SceneRegion>(region)?.is_some() {
-                    edit.promote_entity_to_user(region)?;
-                    edit.remove_entity(region, RemovePolicy::Cascade)?;
+            for entity in unique {
+                if snapshot.entity(entity).is_ok() {
+                    edit.promote_entity_to_user(entity)?;
+                    edit.remove_entity(entity, RemovePolicy::Cascade)?;
                 }
             }
             Ok(())
@@ -1433,6 +1475,39 @@ fn polygons_touch_or_overlap(left: &[ScenePoint], right: &[ScenePoint]) -> bool 
     point_in_polygon(left[0], right) || point_in_polygon(right[0], left)
 }
 
+fn polygon_is_simple(points: &[ScenePoint]) -> bool {
+    if points.len() < 3 {
+        return false;
+    }
+    let twice_area = points
+        .iter()
+        .zip(points.iter().cycle().skip(1))
+        .take(points.len())
+        .map(|(left, right)| left.x * right.y - right.x * left.y)
+        .sum::<f64>();
+    if twice_area.abs() <= 1e-6 {
+        return false;
+    }
+    for left in 0..points.len() {
+        let left_next = (left + 1) % points.len();
+        for right in (left + 1)..points.len() {
+            let right_next = (right + 1) % points.len();
+            if left == right || left_next == right || right_next == left {
+                continue;
+            }
+            if segments_intersect(
+                points[left],
+                points[left_next],
+                points[right],
+                points[right_next],
+            ) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 fn segments_intersect(a: ScenePoint, b: ScenePoint, c: ScenePoint, d: ScenePoint) -> bool {
     const EPSILON: f64 = 1e-6;
     fn orientation(a: ScenePoint, b: ScenePoint, c: ScenePoint) -> f64 {
@@ -1474,6 +1549,28 @@ mod tests {
     use koharu_scene::{Generation, ProducerId, WritingMode};
 
     use super::*;
+
+    fn scene_points(points: &[(f64, f64)]) -> Vec<ScenePoint> {
+        points
+            .iter()
+            .map(|(x, y)| ScenePoint { x: *x, y: *y })
+            .collect()
+    }
+
+    #[test]
+    fn detection_regions_reject_contact_overlap_and_self_crossing() {
+        let square = scene_points(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]);
+        let touching = scene_points(&[(10.0, 2.0), (14.0, 2.0), (14.0, 6.0), (10.0, 6.0)]);
+        let contained = scene_points(&[(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0)]);
+        let separate = scene_points(&[(12.0, 0.0), (16.0, 0.0), (16.0, 4.0), (12.0, 4.0)]);
+        let crossed = scene_points(&[(0.0, 0.0), (10.0, 10.0), (0.0, 10.0), (10.0, 0.0)]);
+
+        assert!(polygons_touch_or_overlap(&square, &touching));
+        assert!(polygons_touch_or_overlap(&square, &contained));
+        assert!(!polygons_touch_or_overlap(&square, &separate));
+        assert!(!polygon_is_simple(&crossed));
+        assert!(polygon_is_simple(&square));
+    }
 
     #[test]
     fn only_user_authored_direction_is_projected_as_an_override() {

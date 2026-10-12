@@ -1,13 +1,13 @@
 use anyhow::Context as _;
 use koharu_desktop::{CanvasState, Desktop};
 use koharu_scene::EntityId;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::State;
 
 use super::{
     ChannelExt as _, Error,
-    canvas::{CanvasChannel, LayerCommit, Point},
+    canvas::{CanvasChannel, Point},
     project::{CurrentProject, Page, Project, Typography},
 };
 async fn synchronize_canvas(
@@ -29,6 +29,13 @@ pub struct GeometryUpdate {
 pub struct TypographyUpdate {
     pub layer: EntityId,
     pub typography: Typography,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Type)]
+pub struct DetectionRegionCommit {
+    pub revision: koharu_scene::Revision,
+    pub region: EntityId,
+    pub layer: EntityId,
 }
 
 #[tracing::instrument(
@@ -235,18 +242,22 @@ pub(crate) async fn add_manual_detection_region(
     desktop: State<'_, Desktop>,
     project: State<'_, CurrentProject>,
     canvas_channel: State<'_, CanvasChannel>,
-) -> Result<LayerCommit, Error> {
-    let (commit, page, layer) = {
+) -> Result<DetectionRegionCommit, Error> {
+    let (commit, page, region, layer) = {
         let mut project = project.project.lock().await;
         let project = project.as_mut().context("no project is open")?;
         let page = project.active_page().context("the project has no active page")?;
-        let (commit, _, layer) = project.add_manual_detection_region(page, points).await?;
+        let (commit, region, layer) = project.add_manual_detection_region(page, points).await?;
         project.record_commit(&commit);
-        (commit, page, layer)
+        (commit, page, region, layer)
     };
     let canvas = synchronize_canvas(&desktop, &commit, Some(page)).await?;
     canvas_channel.channel.publish(canvas);
-    Ok(LayerCommit { revision: commit.revision, layer })
+    Ok(DetectionRegionCommit {
+        revision: commit.revision,
+        region,
+        layer,
+    })
 }
 
 #[tracing::instrument(

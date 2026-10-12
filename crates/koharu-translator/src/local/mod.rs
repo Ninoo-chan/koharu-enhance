@@ -34,8 +34,14 @@ impl LocalTranslator {
             .find(|descriptor| descriptor.id == model)
             .with_context(|| format!("unknown local translator '{model}'"))?;
         let resolved = descriptor.resolve(selection).await?;
+        // A Q4 model plus its BF16 vision projector can leave too little VRAM
+        // for llama.cpp's prompt-evaluation buffers on 4-8 GiB GPUs. Keep the
+        // projector on CPU there while still offloading the language model.
+        let projector_uses_gpu = projector_uses_gpu(device.memory_total);
         let options = LoadOptions {
-            mtmd: resolved.projector.map(MtmdOptions::new),
+            mtmd: resolved
+                .projector
+                .map(|projector| MtmdOptions::new(projector).with_gpu(projector_uses_gpu)),
             ..LoadOptions::default()
         };
         let llm = Llm::load_with_options(device, resolved.model, options)
@@ -113,6 +119,10 @@ impl LocalTranslator {
     }
 }
 
+fn projector_uses_gpu(memory_total: usize) -> bool {
+    memory_total >= 8 * 1024 * 1024 * 1024
+}
+
 pub(crate) fn models() -> Vec<Model> {
     catalog::MODELS
         .iter()
@@ -144,4 +154,16 @@ pub(crate) fn supports_vision(selection: &ModelSelection) -> bool {
             .find(|descriptor| descriptor.id == model)
             .is_some_and(|descriptor| descriptor.projector.is_some())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::projector_uses_gpu;
+
+    #[test]
+    fn keeps_vision_projector_on_cpu_for_low_vram_devices() {
+        assert!(!projector_uses_gpu(4 * 1024 * 1024 * 1024));
+        assert!(!projector_uses_gpu(6 * 1024 * 1024 * 1024));
+        assert!(projector_uses_gpu(8 * 1024 * 1024 * 1024));
+    }
 }

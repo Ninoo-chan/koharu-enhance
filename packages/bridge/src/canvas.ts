@@ -101,9 +101,16 @@ export async function createCanvas(
   canvas.setDeviceLostCallback(onDeviceLost)
 
   return {
-    resize: (width, height, dpr, background) =>
-      canvas.resize(width, height, dpr, new Uint8Array([...background, 255])),
-    setView: (zoom, translation) => canvas.setView(zoom, translation[0], translation[1]),
+    resize: (width, height, dpr, background) => {
+      // ResizeObserver can deliver a queued notification after React disposes
+      // the canvas during Strict Mode or HMR effect cleanup.
+      if (disposed) return
+      canvas.resize(width, height, dpr, new Uint8Array([...background, 255]))
+    },
+    setView: (zoom, translation) => {
+      if (disposed) return
+      canvas.setView(zoom, translation[0], translation[1])
+    },
     stageManifest: (manifest) => {
       const staged = canvas.stageManifest(manifest)
       stagedManifest = { token: staged.token, bytes: manifest.slice() }

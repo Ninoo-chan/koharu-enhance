@@ -679,6 +679,8 @@ describe('greenfield editor', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Brush' }))
     expect(useKoharuStore.getState().tool).toBe('draw')
+    fireEvent.click(screen.getByRole('button', { name: 'Manual detection' }))
+    expect(useKoharuStore.getState().tool).toBe('detection')
     fireEvent.click(screen.getByRole('button', { name: 'Text' }))
     expect(screen.getByTestId('type-inspector')).toBeInTheDocument()
     expect(screen.getByTestId('type-font-picker')).toHaveTextContent('Noto Sans')

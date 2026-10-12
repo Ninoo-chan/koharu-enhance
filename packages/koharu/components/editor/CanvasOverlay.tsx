@@ -6,6 +6,7 @@ import { SelectionControls } from '@/components/editor/SelectionControls'
 import { effectiveLayerVisibility, expandLayerSelection, isTextLayer } from '@/lib/document'
 import { controlFrame, cssFrame, selectableLayer, type Camera } from '@/lib/geometry'
 import type {
+  AnalysisRegion,
   EntityId,
   Frame,
   Geometry,
@@ -23,6 +24,10 @@ interface CanvasOverlayProps {
   previews: Readonly<Record<EntityId, Frame>>
   draft: Frame | null
   cursor: Point | null
+  showDetectionRegions: boolean
+  selectedDetectionRegion: EntityId | null
+  detectionDraft: Point[] | null
+  detectionDraftInvalid: boolean
   brushSize: number
   showBrushCursor: boolean
   onTransformStart: (elements: TransformFrame[]) => void
@@ -39,6 +44,10 @@ export function CanvasOverlay({
   previews,
   draft,
   cursor,
+  showDetectionRegions,
+  selectedDetectionRegion,
+  detectionDraft,
+  detectionDraftInvalid,
   brushSize,
   showBrushCursor,
   onTransformStart,
@@ -84,6 +93,15 @@ export function CanvasOverlay({
     >
       {automaticRegion && (
         <AutomaticRegionOverlay geometry={automaticRegion.geometry} camera={camera} />
+      )}
+      {showDetectionRegions && (
+        <DetectionRegionsOverlay
+          regions={page.regions}
+          camera={camera}
+          selected={selectedDetectionRegion}
+          draft={detectionDraft}
+          draftInvalid={detectionDraftInvalid}
+        />
       )}
       {layers.map(({ layer, frame, opacity }) => {
         const position = cssFrame(frame, camera)
@@ -142,13 +160,7 @@ export function CanvasOverlay({
 }
 
 function AutomaticRegionOverlay({ geometry, camera }: { geometry: Geometry; camera: Camera }) {
-  const dpr = window.devicePixelRatio
-  const points = geometry.points
-    .map(
-      (point) =>
-        `${(point.x * camera.zoom + camera.translation[0]) / dpr},${(point.y * camera.zoom + camera.translation[1]) / dpr}`,
-    )
-    .join(' ')
+  const points = projectedPoints(geometry.points, camera)
   if (!points) return null
 
   return (
@@ -175,6 +187,69 @@ function AutomaticRegionOverlay({ geometry, camera }: { geometry: Geometry; came
       />
     </svg>
   )
+}
+
+function DetectionRegionsOverlay({
+  regions,
+  camera,
+  selected,
+  draft,
+  draftInvalid,
+}: {
+  regions: AnalysisRegion[]
+  camera: Camera
+  selected: EntityId | null
+  draft: Point[] | null
+  draftInvalid: boolean
+}) {
+  return (
+    <svg
+      className='pointer-events-none absolute inset-0 size-full overflow-hidden'
+      data-testid='detection-regions'
+    >
+      {regions.map((region) => {
+        const isSelected = selected === region.id
+        const textRegion = region.kind === 'dev.koharu.region.text'
+        return (
+          <polygon
+            key={region.id}
+            data-region={region.id}
+            points={projectedPoints(region.geometry.points, camera)}
+            fill={isSelected ? 'var(--primary)' : 'var(--canvas-region-stroke)'}
+            fillOpacity={isSelected ? 0.16 : 0.035}
+            stroke={isSelected ? 'var(--primary)' : 'var(--canvas-region-stroke)'}
+            strokeWidth={isSelected ? 3 : 2}
+            strokeDasharray={textRegion ? undefined : '7 5'}
+            vectorEffect='non-scaling-stroke'
+          />
+        )
+      })}
+      {draft && draft.length > 0 && (
+        <polygon
+          data-testid='detection-draft'
+          points={projectedPoints(draft, camera)}
+          fill={draft.length >= 3 ? (draftInvalid ? '#dc2626' : 'var(--primary)') : 'none'}
+          fillOpacity={draft.length >= 3 ? 0.12 : 0}
+          stroke={draftInvalid ? '#dc2626' : 'var(--primary)'}
+          strokeWidth={2}
+          strokeDasharray='6 4'
+          strokeLinejoin='round'
+          strokeLinecap='round'
+          vectorEffect='non-scaling-stroke'
+        />
+      )}
+    </svg>
+  )
+}
+
+function projectedPoints(points: Point[], camera: Camera): string {
+  const dpr = window.devicePixelRatio
+  return points
+    .map(
+      (point) =>
+        `${(point.x * camera.zoom + camera.translation[0]) / dpr},${(point.y * camera.zoom + camera.translation[1]) / dpr}`,
+    )
+    .join(' ')
 }
 
 function DraftOverlay({ frame, camera }: { frame: Frame; camera: Camera }) {

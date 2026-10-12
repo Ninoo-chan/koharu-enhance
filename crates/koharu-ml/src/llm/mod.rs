@@ -152,6 +152,8 @@ impl Default for LoadOptions {
 #[derive(Debug, Clone)]
 pub struct MtmdOptions {
     pub projector_path: PathBuf,
+    /// Whether to place the multimodal projector on the selected accelerator.
+    pub use_gpu: bool,
     /// `-1` selects the projector default.
     pub image_min_tokens: i32,
     /// `-1` selects the projector default.
@@ -163,9 +165,16 @@ impl MtmdOptions {
     pub fn new(projector_path: impl Into<PathBuf>) -> Self {
         Self {
             projector_path: projector_path.into(),
+            use_gpu: true,
             image_min_tokens: -1,
             image_max_tokens: -1,
         }
+    }
+
+    #[must_use]
+    pub fn with_gpu(mut self, use_gpu: bool) -> Self {
+        self.use_gpu = use_gpu;
+        self
     }
 
     #[must_use]

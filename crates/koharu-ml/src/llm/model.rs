@@ -166,7 +166,9 @@ impl Model {
                     projector_path,
                     &model,
                     &MtmdContextParams {
-                        use_gpu: device.backend != Backend::Cpu && backend.supports_gpu_offload(),
+                        use_gpu: options.use_gpu
+                            && device.backend != Backend::Cpu
+                            && backend.supports_gpu_offload(),
                         print_timings: false,
                         n_threads: available_threads(),
                         image_min_tokens: options.image_min_tokens,

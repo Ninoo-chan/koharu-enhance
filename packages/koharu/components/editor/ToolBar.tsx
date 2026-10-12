@@ -4,6 +4,7 @@ import {
   Brush,
   Eraser,
   Hand,
+  Spline,
   Minus,
   MousePointer2,
   Pipette,
@@ -46,6 +47,7 @@ const tools = [
   ['eraser', Eraser],
   ['color_picker', Pipette],
   ['remove', Sparkles],
+  ['detection', Spline],
   ['pan', Hand],
 ] as const satisfies ReadonlyArray<readonly [CanvasTool, typeof MousePointer2]>
 
@@ -176,8 +178,4 @@ function BrushSize({ value, onChange }: { value: number; onChange: (value: numbe
       </PopoverContent>
     </Popover>
   )
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, Number.isFinite(value) ? value : min))
 }

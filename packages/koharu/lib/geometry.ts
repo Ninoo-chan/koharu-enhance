@@ -171,6 +171,92 @@ export function frameContains(frame: Frame, point: Point): boolean {
   return Math.abs(localX) <= frame.width * 0.5 && Math.abs(localY) <= frame.height * 0.5
 }
 
+export function pointInPolygon(point: Point, polygon: Point[]): boolean {
+  if (polygon.length < 3) return false
+  let inside = false
+  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
+    const start = polygon[previous]!
+    const end = polygon[index]!
+    if (pointOnSegment(point, start, end)) return true
+    if ((start.y > point.y) !== (end.y > point.y)) {
+      const crossingX = ((end.x - start.x) * (point.y - start.y)) / (end.y - start.y) + start.x
+      if (point.x < crossingX) inside = !inside
+    }
+  }
+  return inside
+}
+
+export function polygonsTouchOrOverlap(left: Point[], right: Point[]): boolean {
+  if (left.length < 3 || right.length < 3) return true
+  for (let leftIndex = 0; leftIndex < left.length; leftIndex += 1) {
+    const leftStart = left[leftIndex]!
+    const leftEnd = left[(leftIndex + 1) % left.length]!
+    for (let rightIndex = 0; rightIndex < right.length; rightIndex += 1) {
+      const rightStart = right[rightIndex]!
+      const rightEnd = right[(rightIndex + 1) % right.length]!
+      if (segmentsIntersect(leftStart, leftEnd, rightStart, rightEnd)) return true
+    }
+  }
+  return pointInPolygon(left[0]!, right) || pointInPolygon(right[0]!, left)
+}
+
+export function isSimplePolygon(points: Point[]): boolean {
+  if (points.length < 3) return false
+  const area = points.reduce((sum, point, index) => {
+    const next = points[(index + 1) % points.length]!
+    return sum + point.x * next.y - next.x * point.y
+  }, 0)
+  if (Math.abs(area) <= geometryEpsilon) return false
+  for (let left = 0; left < points.length; left += 1) {
+    const leftNext = (left + 1) % points.length
+    for (let right = left + 1; right < points.length; right += 1) {
+      const rightNext = (right + 1) % points.length
+      if (leftNext === right || rightNext === left) continue
+      if (
+        segmentsIntersect(
+          points[left]!,
+          points[leftNext]!,
+          points[right]!,
+          points[rightNext]!,
+        )
+      )
+        return false
+    }
+  }
+  return true
+}
+
+const geometryEpsilon = 1e-6
+
+function segmentsIntersect(a: Point, b: Point, c: Point, d: Point): boolean {
+  const first = orientation(a, b, c)
+  const second = orientation(a, b, d)
+  const third = orientation(c, d, a)
+  const fourth = orientation(c, d, b)
+  return (
+    (Math.abs(first) <= geometryEpsilon && pointOnSegment(c, a, b)) ||
+    (Math.abs(second) <= geometryEpsilon && pointOnSegment(d, a, b)) ||
+    (Math.abs(third) <= geometryEpsilon && pointOnSegment(a, c, d)) ||
+    (Math.abs(fourth) <= geometryEpsilon && pointOnSegment(b, c, d)) ||
+    ((first > 0) !== (second > 0) && (third > 0) !== (fourth > 0))
+  )
+}
+
+function orientation(a: Point, b: Point, c: Point): number {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+}
+
+function pointOnSegment(point: Point, start: Point, end: Point): boolean {
+  const cross = orientation(start, end, point)
+  return (
+    Math.abs(cross) <= geometryEpsilon &&
+    point.x >= Math.min(start.x, end.x) - geometryEpsilon &&
+    point.x <= Math.max(start.x, end.x) + geometryEpsilon &&
+    point.y >= Math.min(start.y, end.y) - geometryEpsilon &&
+    point.y <= Math.max(start.y, end.y) + geometryEpsilon
+  )
+}
+
 export function cssFrame(frame: Frame, camera: Camera): CssFrame {
   const dpr = window.devicePixelRatio
   const scale = camera.zoom / dpr

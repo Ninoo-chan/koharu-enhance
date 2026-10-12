@@ -17,7 +17,15 @@ import type {
 } from '@koharu/bridge/protocol'
 import { toast } from '@koharu/ui/components/toast'
 
-export type CanvasTool = 'select' | 'text' | 'draw' | 'eraser' | 'color_picker' | 'remove' | 'pan'
+export type CanvasTool =
+  | 'select'
+  | 'text'
+  | 'draw'
+  | 'eraser'
+  | 'color_picker'
+  | 'remove'
+  | 'detection'
+  | 'pan'
 export const MIN_BRUSH_DIAMETER = 1
 export function maxBrushDiameter(size: PageSize): number {
   // Assume that for all sizes below 2048 width, 128 is sufficient.
@@ -86,6 +94,7 @@ export const defaultShortcuts: Shortcuts = {
   eraser: 'e',
   color_picker: 'i',
   remove: 'j',
+  detection: 'm',
   pan: 'h',
   fit: '0',
 }
