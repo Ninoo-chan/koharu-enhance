@@ -261,7 +261,10 @@
     "selectAllLayers": "모든 레이어 선택",
     "settings": "설정",
     "undo": "실행 취소",
-    "view": "보기"
+    "view": "보기",
+    "text": "텍스트",
+    "importText": "CSV 가져오기…",
+    "exportText": "CSV 내보내기…"
   },
   "model": {
     "baseUrl": "기본 URL",

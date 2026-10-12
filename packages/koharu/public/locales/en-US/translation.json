@@ -262,7 +262,10 @@
     "selectAllLayers": "Select All Layers",
     "settings": "Settings",
     "undo": "Undo",
-    "view": "View"
+    "view": "View",
+    "text": "Text",
+    "importText": "Import CSV…",
+    "exportText": "Export CSV…"
   },
   "model": {
     "baseUrl": "Base URL",

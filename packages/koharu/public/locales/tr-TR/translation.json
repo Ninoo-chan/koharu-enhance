@@ -261,7 +261,10 @@
     "selectAllLayers": "Tüm Katmanları Seç",
     "settings": "Ayarlar",
     "undo": "Geri Al",
-    "view": "Görünüm"
+    "view": "Görünüm",
+    "text": "Metin",
+    "importText": "CSV içe aktar…",
+    "exportText": "CSV dışa aktar…"
   },
   "model": {
     "baseUrl": "Temel URL",
