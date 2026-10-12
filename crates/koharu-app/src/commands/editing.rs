@@ -10,7 +10,7 @@ use super::{
     canvas::{CanvasChannel, Point},
     project::{CurrentProject, Page, Project, Typography},
 };
-async fn synchronize_canvas(
+pub(crate) async fn synchronize_canvas(
     desktop: &Desktop,
     commit: &koharu_scene::Commit,
     page: Option<EntityId>,
