@@ -261,7 +261,10 @@
     "selectAllLayers": "Выбрать все слои",
     "settings": "Настройки",
     "undo": "Отменить",
-    "view": "Вид"
+    "view": "Вид",
+    "text": "Текст",
+    "importText": "Импорт CSV…",
+    "exportText": "Экспорт CSV…"
   },
   "model": {
     "baseUrl": "Базовый URL",

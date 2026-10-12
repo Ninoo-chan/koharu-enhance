@@ -261,7 +261,10 @@
     "selectAllLayers": "選取所有圖層",
     "settings": "設定",
     "undo": "復原",
-    "view": "檢視"
+    "view": "檢視",
+    "text": "文字",
+    "importText": "匯入 CSV…",
+    "exportText": "匯出 CSV…"
   },
   "model": {
     "baseUrl": "基礎 URL",

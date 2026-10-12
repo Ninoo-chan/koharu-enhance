@@ -262,7 +262,10 @@
     "selectAllLayers": "Seleccionar todas las capas",
     "settings": "Ajustes",
     "undo": "Deshacer",
-    "view": "Ver"
+    "view": "Ver",
+    "text": "Texto",
+    "importText": "Importar CSV…",
+    "exportText": "Exportar CSV…"
   },
   "model": {
     "baseUrl": "URL base",

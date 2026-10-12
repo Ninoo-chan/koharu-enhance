@@ -244,6 +244,20 @@ export function TitleBar() {
           </MenubarMenu>
 
           <MenubarMenu>
+            <MenubarTrigger>{t('menu.text')}</MenubarTrigger>
+            <MenubarContent>
+              <MenubarItem disabled={!project || importingText} onClick={() => void importTextCsv()}>
+                {importingText && <LoaderCircle className='animate-spin' aria-hidden='true' />}
+                {t('menu.importText')}
+              </MenubarItem>
+              <MenubarItem disabled={!project || exportingText} onClick={() => void exportTextCsv()}>
+                {exportingText && <LoaderCircle className='animate-spin' aria-hidden='true' />}
+                {t('menu.exportText')}
+              </MenubarItem>
+            </MenubarContent>
+          </MenubarMenu>
+
+          <MenubarMenu>
             <MenubarTrigger>{t('menu.view')}</MenubarTrigger>
             <MenubarContent>
               <MenubarItem disabled={!page} onClick={requestCanvasFit}>
