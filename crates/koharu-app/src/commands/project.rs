@@ -6,7 +6,7 @@ use koharu_desktop::Frame;
 use koharu_scene::{
     AssetInput, AssetMetadata, AssetRole, At, Authored, Commit, EntityId,
     EntityOrigin, Geometry as SceneGeometry, Group as SceneGroup, Inside, Origin, PageDraft,
-    BubbleRegion, PanelRegion, Point as ScenePoint, Presents, RelationId,
+    BubbleRegion, PanelRegion, Point as ScenePoint, Presents,
     RasterLayer as SceneRasterLayer, RasterLayerKind,
     Region as SceneRegion, RegionSpec, RemovePolicy, Revision, Session, Snapshot,
     SourceText as SceneSourceText, TextGroup as SceneTextGroup, TextLayout as SceneTextLayout,
@@ -1528,6 +1528,15 @@ fn polygons_touch_or_overlap(left: &[ScenePoint], right: &[ScenePoint]) -> bool 
     point_in_polygon(left[0], right) || point_in_polygon(right[0], left)
 }
 
+/// Returns whether `inner` is fully contained within `outer`, treating points
+/// that lie exactly on the outer boundary as inside.
+fn polygons_contain(outer: &[ScenePoint], inner: &[ScenePoint]) -> bool {
+    if outer.len() < 3 || inner.len() < 3 {
+        return false;
+    }
+    inner.iter().all(|point| point_in_polygon(*point, outer))
+}
+
 fn polygon_is_simple(points: &[ScenePoint]) -> bool {
     if points.len() < 3 {
         return false;
@@ -1623,6 +1632,19 @@ mod tests {
         assert!(!polygons_touch_or_overlap(&square, &separate));
         assert!(!polygon_is_simple(&crossed));
         assert!(polygon_is_simple(&square));
+    }
+
+    #[test]
+    fn manual_text_regions_detect_containing_detections() {
+        let square = scene_points(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]);
+        let inside = scene_points(&[(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0)]);
+        let outside = scene_points(&[(12.0, 0.0), (16.0, 0.0), (16.0, 4.0), (12.0, 4.0)]);
+        let straddling = scene_points(&[(8.0, 2.0), (12.0, 2.0), (12.0, 6.0), (8.0, 6.0)]);
+
+        assert!(polygons_contain(&square, &inside));
+        assert!(!polygons_contain(&square, &outside));
+        assert!(!polygons_contain(&square, &straddling));
+        assert!(!polygons_contain(&inside, &square));
     }
 
     #[test]

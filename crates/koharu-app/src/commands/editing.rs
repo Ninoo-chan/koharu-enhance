@@ -247,7 +247,7 @@ pub(crate) async fn add_manual_detection_region(
         let mut project = project.project.lock().await;
         let project = project.as_mut().context("no project is open")?;
         let page = project.active_page().context("the project has no active page")?;
-        let (commit, region, layer) = project.add_manual_detection_region(page, points).await?;
+        let (commit, region, layer) = project.add_manual_text_region(page, points).await?;
         project.record_commit(&commit);
         (commit, page, region, layer)
     };
