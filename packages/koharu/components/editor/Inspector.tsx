@@ -233,7 +233,7 @@ function TypeInspector() {
           </InspectorField>
         </div>
 
-        <div className='grid min-w-0 grid-cols-[minmax(0,1fr)_4.25rem_4.75rem] gap-1.5'>
+        <div className='grid min-w-0 grid-cols-[minmax(0,1fr)_4.25rem] gap-1.5'>
           <InspectorField label={t('inspector.size')}>
             <FontSizeField
               disabled={disabled}
@@ -271,36 +271,6 @@ function TypeInspector() {
                 {weights.map((value) => (
                   <SelectItem key={value} value={String(value)}>
                     {value}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </InspectorField>
-          <InspectorField label={t('inspector.style')}>
-            <Select
-              disabled={disabled}
-              value={style}
-              onValueChange={(font_style) => {
-                const nextStyle = font_style as FontStyle
-                const nextWeights = usableFontWeights(selectedFamily, nextStyle)
-                apply((value) => ({
-                  ...value,
-                  font_style: nextStyle,
-                  font_weight: nearestFontWeight(nextWeights, weight),
-                }))
-              }}
-            >
-              <SelectTrigger
-                size='sm'
-                aria-label={t('inspector.fontStyle')}
-                className='w-full min-w-0'
-              >
-                <SelectValue>{t(`inspector.fontStyles.${style}`)}</SelectValue>
-              </SelectTrigger>
-              <SelectContent align='end'>
-                {styles.map((value) => (
-                  <SelectItem key={value} value={value}>
-                    {t(`inspector.fontStyles.${value}`)}
                   </SelectItem>
                 ))}
               </SelectContent>
