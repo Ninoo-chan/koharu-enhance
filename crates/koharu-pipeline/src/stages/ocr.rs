@@ -159,10 +159,12 @@ impl Model {
             for relation in input.scene.relations_to_as::<RecognizedFrom>(region) {
                 let content = relation.value().source;
                 let previous = input.scene.component::<SourceText>(content)?;
-                if previous
-                    .as_ref()
-                    .is_some_and(|value| matches!(value.text.origin, Origin::User))
-                {
+                // User-authored text is only preserved when it is not empty;
+                // an empty original (e.g. from a PSD import) must be re-OCR'd.
+                if previous.as_ref().is_some_and(|value| {
+                    matches!(value.text.origin, Origin::User)
+                        && !value.text.value.trim().is_empty()
+                }) {
                     continue;
                 }
                 targets.push(OcrTarget {
