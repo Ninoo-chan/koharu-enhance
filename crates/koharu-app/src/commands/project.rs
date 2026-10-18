@@ -633,7 +633,10 @@ impl Project {
         let patch = snapshot.patch(|edit| {
             for entity in unique {
                 if snapshot.entity(entity).is_ok() {
-                    edit.promote_entity_to_user(entity)?;
+                    // Deleting a region must not promote it to user authorship:
+                    // the entities are removed outright, and promoting them used
+                    // to leave behind Origin::User tombstones that blocked OCR
+                    // from regenerating text on the page.
                     edit.remove_entity(entity, RemovePolicy::Cascade)?;
                 }
             }

@@ -35,7 +35,7 @@ pub struct TypographyUpdate {
 pub struct DetectionRegionCommit {
     pub revision: koharu_scene::Revision,
     pub region: EntityId,
-    pub layer: EntityId,
+    pub layer: Option<EntityId>,
 }
 
 #[tracing::instrument(
@@ -239,6 +239,7 @@ pub(crate) async fn set_geometry(
 #[specta::specta]
 pub(crate) async fn add_manual_detection_region(
     points: Vec<Point>,
+    panel: bool,
     desktop: State<'_, Desktop>,
     project: State<'_, CurrentProject>,
     canvas_channel: State<'_, CanvasChannel>,
@@ -247,7 +248,13 @@ pub(crate) async fn add_manual_detection_region(
         let mut project = project.project.lock().await;
         let project = project.as_mut().context("no project is open")?;
         let page = project.active_page().context("the project has no active page")?;
-        let (commit, region, layer) = project.add_manual_text_region(page, points).await?;
+        let (commit, region, layer) = if panel {
+            let (commit, region) = project.add_manual_panel_region(page, points).await?;
+            (commit, region, None)
+        } else {
+            let (commit, region, layer) = project.add_manual_text_region(page, points).await?;
+            (commit, region, Some(layer))
+        };
         project.record_commit(&commit);
         (commit, page, region, layer)
     };
