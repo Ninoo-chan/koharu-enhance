@@ -24,7 +24,7 @@ use koharu_ml::koharu_layout_rfdetr_seg_2xl::{
 use koharu_scene::{
     AssetInput, AssetMetadata, AssetRole, At, BubbleRegion, DetectionAnalysis, DetectionLabel,
     EntityId, EntityOrigin, FitsTo, FlowsIn, Generation, Geometry, Inside, Origin, PanelRegion,
-    Point, RecognizedFrom, Region, RegionKind, RegionSpec, RemovePolicy, TextLayout,
+    Point, Presents, RecognizedFrom, Region, RegionKind, RegionSpec, RemovePolicy, TextLayout,
     TextLayoutKind, TextRegion, TextRole, Typography, WritingMode,
 };
 use rayon::prelude::*;
@@ -100,17 +100,7 @@ impl StageProcessor for Processor {
     }
 
     fn skip(&self, input: &StageInput) -> Result<bool> {
-        for entity in input.scene.descendants(input.page)? {
-            let id = entity.id();
-            if input.contains_entity(id)?
-                && entity
-                    .component::<Region>()?
-                    .is_some_and(|region| region.kind == TextRegion::kind())
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        Ok(page_is_complete(&input.scene, input))
     }
 
     fn unload(&self) -> bool {
@@ -226,13 +216,54 @@ async fn build_patch(
     finish(edit)
 }
 
+/// A page only counts as fully detected when every in-scope text region is
+/// backed by recognized content whose source text was authored by the user
+/// and is non-empty. Deleted regions, orphaned leftovers and empty or
+/// machine-generated text all leave the page incomplete so that detection
+/// can regenerate the layers on the next run.
+fn page_is_complete(scene: &koharu_scene::Snapshot, input: &StageInput) -> bool {
+    let mut saw_region = false;
+    for entity in scene.descendants(input.page).unwrap_or_default() {
+        let id = entity.id();
+        let Ok(true) = input.contains_entity(id) else {
+            continue;
+        };
+        let Ok(Some(region)) = entity.component::<Region>() else {
+            continue;
+        };
+        if region.kind != TextRegion::kind() {
+            continue;
+        }
+        saw_region = true;
+        let protected = scene
+            .relations_to_as::<RecognizedFrom>(id)
+            .filter_map(|relation| scene.entity(relation.value().source).ok())
+            .any(|content| {
+                content
+                    .component::<koharu_scene::SourceText>()
+                    .ok()
+                    .flatten()
+                    .is_some_and(|source| {
+                        source.text.origin == Origin::User
+                            && !source.text.value.trim().is_empty()
+                    })
+            });
+        if !protected {
+            return false;
+        }
+    }
+    saw_region
+}
+
 fn remove_previous_regions(
     input: &StageInput,
     edit: &mut koharu_scene::Edit,
     generation: &Generation,
 ) -> Result<()> {
+    let scene = &input.scene;
     let mut remove = Vec::new();
-    for entity in input.scene.descendants(input.page)? {
+    let mut presented = Vec::new();
+    for entity in scene.descendants(input.page)? {
         let id = entity.id();
         if !input.contains_entity(id)? {
             continue;
@@ -246,9 +277,39 @@ fn remove_previous_regions(
         if owned_region {
             remove.push(id);
         }
+        // Content entities live at page level and are not Regions; they are
+        // only removed once every layer presenting them is gone, which covers
+        // leftovers from deleted text layers and their recognition links.
+        if entity.component::<Region>()?.is_none()
+            && scene.relations_from_as::<Presents>(id).next().is_some()
+        {
+            presented.push(id);
+        }
+    }
+    for content in presented {
+        let orphan = scene
+            .relations_to_as::<Presents>(content)
+            .filter_map(|relation| scene.entity(relation.value().source).ok())
+            .all(|layer| {
+                let id = layer.id();
+                let Ok(true) = input.contains_entity(id) else {
+                    return false;
+                };
+                let generated_layer = layer
+                    .component::<EntityOrigin>()
+                    .ok()
+                    .flatten()
+                    .is_some_and(|origin| {
+                        matches!(origin.origin, Origin::Generated(ref owner) if owner.producer == generation.producer)
+                    });
+                generated_layer || remove.contains(&id)
+            });
+        if orphan {
+            remove.push(content);
+        }
     }
     for entity in remove {
-        if input.scene.entity(entity).is_ok() {
+        if scene.entity(entity).is_ok() {
             edit.remove_entity(entity, RemovePolicy::Cascade)?;
         }
     }
@@ -1839,8 +1900,9 @@ mod tests {
     };
     use koharu_ml::koharu_layout_rfdetr_seg_2xl::{KoharuLayoutDetection, KoharuLayoutMask};
     use koharu_scene::{
-        At, BubbleRegion, FitsTo, FlowsIn, Geometry, Inside, Origin, PageDraft, Session,
-        TextLayout, TextLayoutKind, TextRegion, Typography, WritingMode,
+        At, Authored, BubbleRegion, FitsTo, FlowsIn, Geometry, Inside, Origin, PageDraft,
+        RecognizedFrom, Session, SourceText, TextLayout, TextLayoutKind, TextRegion, Typography,
+        WritingMode,
     };
 
     use super::{
@@ -1848,7 +1910,8 @@ mod tests {
         ImageSize, KoharuLayoutRFDetrSeg2XLConfig, MaskPixel, PageRegions, Processor, RegionOutput,
         StageInput, StageProcessor, closed_mask_for, color_palette, generation, infer_typography,
         layout_order, link_dialogue_regions, mask_containment, mask_for, mask_geometry,
-        non_maximum_suppression, normalize_text_color, write_region,
+        non_maximum_suppression, normalize_text_color, page_is_complete, remove_previous_regions,
+        write_region,
     };
 
     #[test]
@@ -1869,18 +1932,75 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn detection_skips_a_page_with_existing_text() {
+    async fn detection_skips_a_page_with_user_text() {
+        let mut session = Session::memory().await.unwrap();
+        let mut page = None;
+        let mut region = None;
+        let patch = session
+            .snapshot()
+            .patch(|edit| {
+                let id = edit.add_page(PageDraft::new("page", 100.0, 100.0), At::End)?;
+                let text = edit.add_analysis_region::<TextRegion>(
+                    id,
+                    At::End,
+                    &Geometry::rectangle(10.0, 10.0, 20.0, 20.0),
+                    None,
+                )?;
+                let content = edit.add_text_content(id, At::End)?;
+                edit.relate::<RecognizedFrom>(content, text)?;
+                edit.set(
+                    content,
+                    &SourceText {
+                        text: Authored::user("hola".to_owned()),
+                        language: None,
+                    },
+                )?;
+                page = Some(id);
+                region = Some(text);
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(patch).await.unwrap().snapshot;
+        let page = page.unwrap();
+        let input = StageInput::new(
+            snapshot,
+            page,
+            None,
+            None,
+            std::sync::Arc::new(crate::ImageCache::default()),
+            None,
+        );
+        let processor = Processor::new(
+            DetectionModel::KoharuLayoutRFDetrSeg2XL(KoharuLayoutRFDetrSeg2XLConfig::default()),
+            koharu_ml::Device::cpu(),
+        );
+
+        assert!(processor.skip(&input).unwrap());
+        drop(region);
+    }
+
+    #[tokio::test]
+    async fn detection_reruns_when_user_text_is_empty() {
         let mut session = Session::memory().await.unwrap();
         let mut page = None;
         let patch = session
             .snapshot()
             .patch(|edit| {
                 let id = edit.add_page(PageDraft::new("page", 100.0, 100.0), At::End)?;
-                edit.add_analysis_region::<TextRegion>(
+                let text = edit.add_analysis_region::<TextRegion>(
                     id,
                     At::End,
                     &Geometry::rectangle(10.0, 10.0, 20.0, 20.0),
                     None,
+                )?;
+                let content = edit.add_text_content(id, At::End)?;
+                edit.relate::<RecognizedFrom>(content, text)?;
+                edit.set(
+                    content,
+                    &SourceText {
+                        text: Authored::user(String::new()),
+                        language: None,
+                    },
                 )?;
                 page = Some(id);
                 Ok(())
@@ -1901,7 +2021,112 @@ mod tests {
             koharu_ml::Device::cpu(),
         );
 
-        assert!(processor.skip(&input).unwrap());
+        assert!(!processor.skip(&input).unwrap());
+    }
+
+    #[tokio::test]
+    async fn detection_reruns_on_a_page_without_text_regions() {
+        let mut session = Session::memory().await.unwrap();
+        let mut page = None;
+        let patch = session
+            .snapshot()
+            .patch(|edit| {
+                let id = edit.add_page(PageDraft::new("page", 100.0, 100.0), At::End)?;
+                page = Some(id);
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(patch).await.unwrap().snapshot;
+        let page = page.unwrap();
+        let input = StageInput::new(
+            snapshot,
+            page,
+            None,
+            None,
+            std::sync::Arc::new(crate::ImageCache::default()),
+            None,
+        );
+
+        assert!(!page_is_complete(&input.scene, &input));
+    }
+
+    #[tokio::test]
+    async fn detection_clears_content_left_by_deleted_layers() {
+        let mut session = Session::memory().await.unwrap();
+        let mut ids = (None, None, None, None);
+        let patch = session
+            .snapshot()
+            .patch(|edit| {
+                let page = edit.add_page(PageDraft::new("page", 100.0, 100.0), At::End)?;
+                let region = edit.add_analysis_region::<TextRegion>(
+                    page,
+                    At::End,
+                    &Geometry::rectangle(10.0, 10.0, 20.0, 20.0),
+                    None,
+                )?;
+                let content = edit.add_text_content(page, At::End)?;
+                edit.relate::<RecognizedFrom>(content, region)?;
+                let layer = edit.add_text_layer(
+                    page,
+                    At::End,
+                    content,
+                    &TextLayout {
+                        origin: Origin::User,
+                        kind: TextLayoutKind::Paragraph,
+                        angle_degrees: None,
+                    },
+                )?;
+                ids = (Some(page), Some(region), Some(content), Some(layer));
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(patch).await.unwrap().snapshot;
+        let (page, region, content, layer) = (
+            ids.0.unwrap(),
+            ids.1.unwrap(),
+            ids.2.unwrap(),
+            ids.3.unwrap(),
+        );
+
+        // The user deletes the text layer; the content and its region remain.
+        let commit = session
+            .commit(
+                snapshot.patch(|edit| {
+                    edit.remove_entity(layer, RemovePolicy::Cascade)?;
+                    Ok(())
+                })?,
+            )
+            .await
+            .unwrap();
+        let snapshot = commit.snapshot;
+        let input = StageInput::new(
+            snapshot,
+            page,
+            None,
+            None,
+            std::sync::Arc::new(crate::ImageCache::default()),
+            None,
+        );
+
+        // With no presenting layer left, the orphaned content is gone too and
+        // the page is incomplete again, so detection will regenerate regions.
+        let generation = generation(PRODUCER, MODEL_ID).unwrap();
+        let patch = input.scene.patch(|edit| {
+            edit.observe_subtree(page)?;
+            remove_previous_regions(&input, edit, &generation)
+        })?;
+        let after = session.commit(patch).await.unwrap().snapshot;
+        assert!(after.entity(content).is_err());
+        let rebuilt = StageInput::new(
+            after.clone(),
+            page,
+            None,
+            None,
+            std::sync::Arc::new(crate::ImageCache::default()),
+            None,
+        );
+        assert!(!page_is_complete(&after, &rebuilt));
+        assert!(after.entity(region).is_ok());
     }
 
     #[tokio::test]
