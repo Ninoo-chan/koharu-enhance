@@ -43,7 +43,7 @@
         "@tauri-apps/api": "3.0.0-alpha.2",
         "@tauri-apps/plugin-opener": "3.0.0-alpha.2",
         "@tauri-apps/plugin-process": "3.0.0-alpha.2",
-        "@tauri-apps/plugin-updater": "3.0.0-alpha.2",
+        "@tauri-apps/plugin-updater": "3.0.0-alpha.3",
         "i18next": "^26.4.2",
         "i18next-browser-languagedetector": "^8.2.1",
         "i18next-localstorage-backend": "^4.3.2",
@@ -702,7 +702,7 @@
 
     "@tauri-apps/plugin-process": ["@tauri-apps/plugin-process@3.0.0-alpha.2", "", { "dependencies": { "@tauri-apps/api": "^3.0.0-alpha.1" } }, "sha512-ASkIJva1x92pbWQ/GfoP6VcEJJqjN+qYspZmldFl1gvZ/sm+zo5BO+p71s/tl5X7moqP66ti44tQezsjx+DEPw=="],
 
-    "@tauri-apps/plugin-updater": ["@tauri-apps/plugin-updater@3.0.0-alpha.2", "", { "dependencies": { "@tauri-apps/api": "^3.0.0-alpha.1" } }, "sha512-WHRIi50gV9M2JDx9VZLxlpcuA3gvd7eABaqfNQEQTdKUSuIWyS/gQcbH5LpiuSWSkCTMMInUUBmost2LdZnnkA=="],
+    "@tauri-apps/plugin-updater": ["@tauri-apps/plugin-updater@3.0.0-alpha.3", "", { "dependencies": { "@tauri-apps/api": "^3.0.0-alpha.2" } }, "sha512-7J0W1o7WaZi8H9E9Ixteyf2KE/PgqDGlvT8fzhXoswrCWv8AES7zzwoxLRsK+Uz4tGkEFTqUbz8xyiiJ+N1xUQ=="],
 
     "@testing-library/dom": ["@testing-library/dom@10.4.2", "", { "dependencies": { "@babel/code-frame": "^7.10.4", "@babel/runtime": "^7.12.5", "@types/aria-query": "^5.0.1", "aria-query": "5.3.0", "dom-accessibility-api": "^0.5.9", "lz-string": "^1.5.0", "picocolors": "1.1.1", "pretty-format": "^27.0.2" } }, "sha512-yzr2S9HyAIdhz2/6qHgbs665Q7PKVcDF05vsOlHPxG1mo36gKVesdYVeDLnXgfjJ03CrKRk08knc6+E/9m8v2Q=="],
 
