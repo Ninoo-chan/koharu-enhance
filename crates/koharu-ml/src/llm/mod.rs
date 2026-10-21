@@ -13,9 +13,39 @@ use self::model::Model;
 
 pub use koharu_llama::model::params::LlamaLoadMode;
 
-const DEFAULT_GPU_LAYERS: u32 = 1000;
+/// Fraction of accelerator memory kept free for compute buffers, the KV cache,
+/// vision tokens, and other resident models sharing the device.
+pub const GPU_MEMORY_HEADROOM: f64 = 0.75;
+/// Accelerators with less memory than this are treated as low-VRAM devices and
+/// receive conservative defaults (quantized KV cache, Flash Attention, CPU projector).
+pub const LOW_VRAM_THRESHOLD: usize = 8 * 1024 * 1024 * 1024;
+
 const DEFAULT_MAX_TOKENS: usize = 512;
 const DEFAULT_SEED: u32 = 299_792_458;
+
+/// Suggests how many transformer layers fit on an accelerator with the given
+/// total memory, loading the rest on the CPU.
+///
+/// The heuristic reserves [`GPU_MEMORY_HEADROOM`] of the device memory for the
+/// model weights and distributes them evenly across `layer_count` layers,
+/// keeping at least one layer on the GPU whenever any part of the model fits.
+#[must_use]
+pub fn suggested_gpu_layers(
+    memory_total: usize,
+    model_size_bytes: u64,
+    layer_count: u32,
+) -> Option<u32> {
+    if layer_count == 0 || model_size_bytes == 0 || memory_total == 0 {
+        return None;
+    }
+    let budget = (memory_total as f64 * GPU_MEMORY_HEADROOM) as u64;
+    if budget <= model_size_bytes {
+        return Some(1);
+    }
+    let bytes_per_layer = model_size_bytes.div_ceil(u64::from(layer_count)).max(1);
+    let layers = budget / bytes_per_layer;
+    Some(u32::try_from(layers).unwrap_or(layer_count).clamp(1, layer_count))
+}
 
 /// Marker consumed by llama.cpp's multimodal tokenizer for one attached media input.
 #[must_use]
@@ -128,7 +158,8 @@ impl Llm {
 #[derive(Debug, Clone)]
 pub struct LoadOptions {
     /// Number of model layers to offload when an accelerator is selected.
-    pub gpu_layers: u32,
+    /// `None` derives the largest layer count that fits the accelerator's memory.
+    pub gpu_layers: Option<u32>,
     /// Controls how llama.cpp reads and retains model data.
     pub load_mode: LlamaLoadMode,
     /// Overrides an incorrect end-of-sequence token advertised by a GGUF file.
@@ -140,7 +171,7 @@ pub struct LoadOptions {
 impl Default for LoadOptions {
     fn default() -> Self {
         Self {
-            gpu_layers: DEFAULT_GPU_LAYERS,
+            gpu_layers: None,
             load_mode: LlamaLoadMode::Auto,
             eos_token_id: None,
             mtmd: None,
@@ -464,6 +495,34 @@ mod tests {
     #[test]
     fn load_options_do_not_override_eos_by_default() {
         assert_eq!(LoadOptions::default().eos_token_id, None);
+    }
+
+    #[test]
+    fn load_options_derive_gpu_layers_by_default() {
+        assert_eq!(LoadOptions::default().gpu_layers, None);
+    }
+
+    #[test]
+    fn suggested_gpu_layers_fits_whole_model_on_large_devices() {
+        let gib = 1024 * 1024 * 1024;
+        // 5 GiB model on a 24 GiB device: every layer fits within the budget.
+        assert_eq!(suggested_gpu_layers(24 * gib, 5 * gib as u64, 48), Some(48));
+    }
+
+    #[test]
+    fn suggested_gpu_layers_splits_models_that_exceed_low_vram_devices() {
+        let gib = 1024 * 1024 * 1024;
+        // 7.5 GiB model (150 MiB/layer) on a 4 GiB device with a 3 GiB budget.
+        assert_eq!(suggested_gpu_layers(4 * gib, 7 * gib as u64, 48), Some(20));
+        // Models larger than the budget still keep one layer on the GPU.
+        assert_eq!(suggested_gpu_layers(4 * gib, 9 * gib as u64, 40), Some(1));
+    }
+
+    #[test]
+    fn suggested_gpu_layers_is_unknown_without_device_memory() {
+        assert_eq!(suggested_gpu_layers(0, 1024, 48), None);
+        assert_eq!(suggested_gpu_layers(4096, 0, 48), None);
+        assert_eq!(suggested_gpu_layers(4096, 1024, 0), None);
     }
 
     #[test]
