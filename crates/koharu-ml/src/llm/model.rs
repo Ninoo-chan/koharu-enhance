@@ -7,7 +7,6 @@
 
 use std::{
     fmt::{Debug, Formatter},
-    fs,
     num::NonZeroU32,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
@@ -17,8 +16,8 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use koharu_llama::{
     context::{
-        KvCacheType, LlamaContext,
-        params::{LlamaAttentionType, LlamaContextParams},
+        LlamaContext,
+        params::{KvCacheType, LlamaAttentionType, LlamaContextParams},
     },
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
@@ -44,18 +43,27 @@ use crate::Backend;
 const DEFAULT_MAX_UBATCH: u32 = 512;
 const CHAT_TEMPLATE_NAME: &str = "chat";
 /// llama.cpp flash-attention policy `LLAMA_FLASH_ATTN_TYPE_ENABLED`.
-const FLASH_ATTENTION_ENABLED: koharu_llama_sys::llama_flash_attn_type = 1;
+const FLASH_ATTENTION_ENABLED: i32 = 1;
 /// llama.cpp flash-attention policy `LLAMA_FLASH_ATTN_TYPE_AUTO`.
-const FLASH_ATTENTION_AUTO: koharu_llama_sys::llama_flash_attn_type = -1;
+const FLASH_ATTENTION_AUTO: i32 = -1;
 
 pub(super) struct Model {
     backend: &'static LlamaBackend,
     model: LlamaModel,
+    gpu_state: Option<GpuState>,
     mtmd: Option<Mutex<MtmdContext>>,
     capabilities: Capabilities,
     eos_token: LlamaToken,
     chat_template: ChatTemplate,
     llguidance_factory: OnceLock<std::result::Result<ParserFactory, String>>,
+}
+
+/// Accelerator characteristics captured while loading the model, used to pick
+/// conservative context settings (quantized KV cache, Flash Attention) on
+/// low-VRAM devices.
+#[derive(Clone, Copy)]
+struct GpuState {
+    memory_total: usize,
 }
 
 impl Debug for Model {
@@ -617,11 +625,17 @@ fn model_params(
     backend: &LlamaBackend,
     device: &crate::Device,
     options: &LoadOptions,
+    model_size_bytes: u64,
+    layer_count: u32,
 ) -> Result<LlamaModelParams> {
     let gpu_layers = if device.backend == Backend::Cpu || !backend.supports_gpu_offload() {
         0
     } else {
-        options.gpu_layers
+        match options.gpu_layers {
+            Some(gpu_layers) => gpu_layers.min(layer_count),
+            None => suggested_gpu_layers(device.memory_total, model_size_bytes, layer_count)
+                .unwrap_or(layer_count),
+        }
     };
     let mut params = LlamaModelParams::default()
         .with_n_gpu_layers(gpu_layers)
