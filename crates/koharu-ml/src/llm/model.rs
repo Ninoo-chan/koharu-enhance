@@ -22,7 +22,10 @@ use koharu_llama::{
     },
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
-    model::{AddBos, LlamaModel, params::LlamaLoadMode},
+    model::{
+        AddBos, LlamaModel,
+        params::{LlamaLoadMode, LlamaModelParams},
+    },
     mtmd::{MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputChunks, MtmdInputText},
     sampling::LlamaSampler,
     token::LlamaToken,
