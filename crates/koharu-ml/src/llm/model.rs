@@ -7,6 +7,7 @@
 
 use std::{
     fmt::{Debug, Formatter},
+    fs,
     num::NonZeroU32,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
@@ -16,12 +17,12 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use koharu_llama::{
     context::{
-        LlamaContext,
+        KvCacheType, LlamaContext,
         params::{LlamaAttentionType, LlamaContextParams},
     },
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
-    model::{AddBos, LlamaModel, params::LlamaModelParams},
+    model::{AddBos, LlamaModel, params::LlamaLoadMode},
     mtmd::{MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputChunks, MtmdInputText},
     sampling::LlamaSampler,
     token::LlamaToken,
@@ -32,12 +33,17 @@ use serde::Serialize;
 
 use super::{
     Capabilities, ChatMessage, ChatTemplateOptions, FinishReason, Generation, GenerationControl,
-    GenerationOptions, Input, LoadOptions, Media, TokenChunk,
+    GenerationOptions, Input, LOW_VRAM_THRESHOLD, LoadOptions, Media, TokenChunk,
+    suggested_gpu_layers,
 };
 use crate::Backend;
 
 const DEFAULT_MAX_UBATCH: u32 = 512;
 const CHAT_TEMPLATE_NAME: &str = "chat";
+/// llama.cpp flash-attention policy `LLAMA_FLASH_ATTN_TYPE_ENABLED`.
+const FLASH_ATTENTION_ENABLED: koharu_llama_sys::llama_flash_attn_type = 1;
+/// llama.cpp flash-attention policy `LLAMA_FLASH_ATTN_TYPE_AUTO`.
+const FLASH_ATTENTION_AUTO: koharu_llama_sys::llama_flash_attn_type = -1;
 
 pub(super) struct Model {
     backend: &'static LlamaBackend,
