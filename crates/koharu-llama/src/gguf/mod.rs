@@ -86,6 +86,23 @@ impl GgufContext {
         unsafe { CStr::from_ptr(ptr).to_str().ok() }
     }
 
+    /// Read the `uint32` value stored under `key`. Returns `None` if the key is
+    /// missing or holds a different type.
+    pub fn get_u32(&self, key: &str) -> Option<u32> {
+        let idx = self.find_key(key);
+        (idx >= 0 && self.kv_type(idx) == koharu_llama_sys::GGUF_TYPE_UINT32)
+            .then(|| self.val_u32(idx))
+    }
+
+    /// Read the string stored under `key`. Returns `None` if the key is
+    /// missing, holds a different type, or is not valid UTF-8.
+    pub fn get_str(&self, key: &str) -> Option<&str> {
+        let idx = self.find_key(key);
+        (idx >= 0 && self.kv_type(idx) == koharu_llama_sys::GGUF_TYPE_STRING)
+            .then(|| self.val_str(idx))
+            .flatten()
+    }
+
     /// Total number of tensors described in the file.
     pub fn n_tensors(&self) -> i64 {
         unsafe { koharu_llama_sys::gguf_get_n_tensors(self.ctx.as_ptr()) }

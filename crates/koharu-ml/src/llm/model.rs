@@ -19,12 +19,10 @@ use koharu_llama::{
         LlamaContext,
         params::{KvCacheType, LlamaAttentionType, LlamaContextParams},
     },
+    gguf::GgufContext,
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
-    model::{
-        AddBos, LlamaModel,
-        params::{LlamaLoadMode, LlamaModelParams},
-    },
+    model::{AddBos, LlamaModel, params::LlamaModelParams},
     mtmd::{MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputChunks, MtmdInputText},
     sampling::LlamaSampler,
     token::LlamaToken,
@@ -157,7 +155,14 @@ impl Model {
     ) -> Result<Self> {
         ensure_file(&model_path, "GGUF model")?;
         let backend = crate::llama_backend().context("llama.cpp backend is not initialized")?;
-        let params = model_params(backend, device, &options)?;
+        let model_size_bytes = std::fs::metadata(&model_path)
+            .with_context(|| format!("failed to stat GGUF model {}", model_path.display()))?
+            .len();
+        let layer_count = gguf_layer_count(&model_path)?;
+        let params = model_params(backend, device, &options, model_size_bytes, layer_count)?;
+        let gpu_state = (params.n_gpu_layers() > 0).then_some(GpuState {
+            memory_total: device.memory_total,
+        });
         let model = LlamaModel::load_from_file(backend, &model_path, &params)
             .with_context(|| format!("failed to load GGUF model {}", model_path.display()))?;
         ensure!(
@@ -219,6 +224,7 @@ impl Model {
         Ok(Self {
             backend,
             model,
+            gpu_state,
             mtmd,
             capabilities,
             eos_token,
@@ -274,7 +280,7 @@ impl Model {
             )
         };
         let prepared = self.prepare_prompt(input, options.add_special, mtmd.as_deref())?;
-        let context_config = context_config(&prepared, options)?;
+        let context_config = context_config(&prepared, options, self.gpu_state)?;
         let mut context = self
             .model
             .new_context(self.backend, context_config.params)
@@ -621,6 +627,19 @@ struct ContextConfig {
     n_batch: u32,
 }
 
+/// Reads the transformer block count from GGUF metadata so the GPU offload
+/// split can be chosen before any weights are loaded.
+fn gguf_layer_count(path: &Path) -> Result<u32> {
+    let gguf = GgufContext::from_file(path)
+        .with_context(|| format!("failed to read GGUF metadata from {}", path.display()))?;
+    let architecture = gguf
+        .get_str("general.architecture")
+        .context("GGUF metadata has no string general.architecture key")?;
+    let key = format!("{architecture}.block_count");
+    gguf.get_u32(&key)
+        .with_context(|| format!("GGUF metadata has no uint32 {key} key"))
+}
+
 fn model_params(
     backend: &LlamaBackend,
     device: &crate::Device,
@@ -648,12 +667,29 @@ fn model_params(
     Ok(params)
 }
 
-fn context_config(prepared: &PreparedPrompt, options: &GenerationOptions) -> Result<ContextConfig> {
+fn context_config(
+    prepared: &PreparedPrompt,
+    options: &GenerationOptions,
+    gpu_state: Option<GpuState>,
+) -> Result<ContextConfig> {
     let values = context_values(prepared, options)?;
     let mut params = LlamaContextParams::default()
         .with_n_ctx(Some(values.n_ctx))
         .with_n_batch(values.n_batch)
         .with_n_ubatch(values.n_ubatch);
+    // llama.cpp only supports a quantized V cache together with Flash Attention,
+    // so both are enabled together on low-VRAM accelerators. Unknown device
+    // memory (`0`) keeps the default F16 cache.
+    let low_vram = gpu_state
+        .is_some_and(|state| state.memory_total != 0 && state.memory_total < LOW_VRAM_THRESHOLD);
+    params = if low_vram {
+        params
+            .with_flash_attention_policy(FLASH_ATTENTION_ENABLED)
+            .with_type_k(KvCacheType::Q8_0)
+            .with_type_v(KvCacheType::Q8_0)
+    } else {
+        params.with_flash_attention_policy(FLASH_ATTENTION_AUTO)
+    };
     if prepared.non_causal {
         params = params.with_attention_type(LlamaAttentionType::NonCausal);
     }
