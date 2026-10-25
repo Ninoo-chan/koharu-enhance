@@ -222,8 +222,11 @@ async fn build_patch(
 /// machine-generated text all leave the page incomplete so that detection
 /// can regenerate the layers on the next run.
 fn page_is_complete(scene: &koharu_scene::Snapshot, input: &StageInput) -> bool {
+    let Ok(descendants) = scene.descendants(input.page) else {
+        return false;
+    };
     let mut saw_region = false;
-    for entity in scene.descendants(input.page).unwrap_or_default() {
+    for entity in descendants {
         let id = entity.id();
         let Ok(true) = input.contains_entity(id) else {
             continue;
