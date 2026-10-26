@@ -27,6 +27,15 @@ struct DrawUniforms {
     sampling_options: vec4<f32>,
 }
 
+// Vello writes its vector output with a premultiplied-alpha blend, so the
+// overlay texture must be rescaled by the draw opacity while keeping the RGB
+// channels premultiplied. Plain `color * opacity` would leave straight RGB
+// against a premultiplied alpha, which shows up as a faint differently-tinted
+// outline around solid-colour glyphs.
+struct VectorDrawUniforms {
+    opacity_premultiply: f32,
+}
+
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -37,6 +46,7 @@ struct VertexOutput {
 @group(0) @binding(1) var erase_texture: texture_2d<f32>;
 @group(0) @binding(2) var texture_sampler: sampler;
 @group(0) @binding(3) var<uniform> uniforms: DrawUniforms;
+@group(0) @binding(4) var<uniform> vector_uniforms: VectorDrawUniforms;
 
 @vertex
 fn vertex(@builtin(vertex_index) index: u32) -> VertexOutput {
@@ -84,11 +94,32 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     return color * (uniforms.target_options.z * (1.0 - erase * uniforms.target_options.w));
 }
+
+// Vector overlays arrive from Vello already premultiplied. Multiplying them by
+// their own alpha again would darken every partially covered edge pixel, which
+// shows up as a faint differently-tinted outline around solid-colour glyphs.
+// This pass only scales the overlay by the draw opacity, keeping RGB
+// premultiplied against the blend state.
+@fragment
+fn fragment_premultiplied(input: VertexOutput) -> @location(0) vec4<f32> {
+    let color = textureSample(source_texture, texture_sampler, input.uv);
+    return color * vector_uniforms.opacity_premultiply;
+}
 "#;
 
 pub enum CompositionCommand {
     Raster(RasterDraw),
+    /// Vector batch composited over the already-drawn content.
     Vector(Box<Scene>),
+    /// Live brush-stroke preview. It is drawn last and never disturbs the
+    /// committed vector layers (text) beneath it.
+    StrokePreview(Box<Scene>),
+}
+
+impl CompositionCommand {
+    const fn is_vector(&self) -> bool {
+        matches!(self, Self::Vector(_) | Self::StrokePreview(_))
+    }
 }
 
 pub struct RasterDraw {
@@ -139,6 +170,7 @@ impl ScratchTarget {
 
 pub struct GpuCompositor {
     pipeline: wgpu::RenderPipeline,
+    vector_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     empty_mask: CachedTexture,
@@ -188,6 +220,16 @@ impl GpuCompositor {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -224,8 +266,34 @@ impl GpuCompositor {
             multiview_mask: None,
             cache: None,
         });
+        let vector_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("koharu raster compositor vector pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vertex"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fragment_premultiplied"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         Self {
             pipeline,
+            vector_pipeline,
             bind_group_layout,
             sampler,
             empty_mask: create_texture(device, "koharu empty erase mask", 1, 1, None),
@@ -401,9 +469,7 @@ impl GpuCompositor {
         if size.0 == 0 || size.1 == 0 {
             return Ok(());
         }
-        if commands
-            .iter()
-            .any(|command| matches!(command, CompositionCommand::Vector(_)))
+        if commands.iter().any(CompositionCommand::is_vector)
             && self
                 .overlay
                 .as_ref()
@@ -423,7 +489,9 @@ impl GpuCompositor {
                     .iter()
                     .map(|tile| tile.id())
                     .collect::<Vec<_>>(),
-                CompositionCommand::Vector(_) => Vec::new(),
+                CompositionCommand::Vector(_) | CompositionCommand::StrokePreview(_) => {
+                    Vec::new()
+                }
             })
             .collect::<HashSet<_>>();
         for command in commands {
@@ -482,10 +550,11 @@ impl GpuCompositor {
                             draw.opacity.clamp(0.0, 1.0),
                             draw.erase && erase_mask.is_some(),
                             clip,
+                            false,
                         );
                     }
                 }
-                CompositionCommand::Vector(scene) => {
+                CompositionCommand::Vector(scene) | CompositionCommand::StrokePreview(scene) => {
                     let overlay = &self
                         .overlay
                         .as_ref()
@@ -506,6 +575,7 @@ impl GpuCompositor {
                         1.0,
                         false,
                         clip,
+                        true,
                     );
                 }
             }
@@ -613,6 +683,7 @@ impl GpuCompositor {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::fn_params_excessive_bools)]
     fn draw(
         &self,
         device: &wgpu::Device,
@@ -628,6 +699,7 @@ impl GpuCompositor {
         opacity: f32,
         use_erase: bool,
         clip: [u32; 4],
+        vector: bool,
     ) {
         let [a, b, c, d, e, f] = transform.as_coeffs();
         let pixel_aligned =
@@ -663,6 +735,19 @@ impl GpuCompositor {
             contents: &bytes,
             usage: wgpu::BufferUsages::UNIFORM,
         });
+        // The vector pass reads its opacity from a separate binding so it never
+        // touches the raster `DrawUniforms`. WGSL pads the single-f32 struct to
+        // a 16-byte uniform stride, hence the four-float buffer.
+        let opacity = opacity.clamp(0.0, 1.0);
+        let vector_bytes = [opacity, 0.0, 0.0, 0.0]
+            .iter()
+            .flat_map(|value| value.to_ne_bytes())
+            .collect::<Vec<_>>();
+        let vector_uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("koharu raster compositor vector uniforms"),
+            contents: &vector_bytes,
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("koharu raster compositor bind group"),
             layout: &self.bind_group_layout,
@@ -682,6 +767,10 @@ impl GpuCompositor {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: uniforms.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: vector_uniforms.as_entire_binding(),
                 },
             ],
         });
@@ -706,7 +795,11 @@ impl GpuCompositor {
                 multiview_mask: None,
             });
             pass.set_scissor_rect(clip[0], clip[1], clip[2], clip[3]);
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(if vector {
+                &self.vector_pipeline
+            } else {
+                &self.pipeline
+            });
             pass.set_bind_group(0, &bind_group, &[]);
             pass.draw(0..6, 0..1);
         }

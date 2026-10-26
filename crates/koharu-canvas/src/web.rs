@@ -851,6 +851,16 @@ impl CanvasState {
                     && presentation.opacity > 0.0;
             }
         }
+        flush_vectors(
+            &mut commands,
+            &mut vectors,
+            &mut vectors_pending,
+            camera,
+            page_rect,
+            viewport_rect,
+        );
+        // Live brush strokes get their own vector batch so extending a stroke
+        // never re-renders (or visually disturbs) the committed text layers.
         if let Some(stroke) = self
             .stroke
             .as_ref()
@@ -861,8 +871,9 @@ impl CanvasState {
                 StrokeKind::Inpaint => 116.0 / 255.0,
                 StrokeKind::Erase => 1.0,
             };
+            let mut preview = Scene::new();
             if opacity < 1.0 {
-                vectors.push_layer(
+                preview.push_layer(
                     Fill::NonZero,
                     Mix::Normal,
                     opacity,
@@ -870,20 +881,17 @@ impl CanvasState {
                     &page_rect,
                 );
             }
-            vectors.append(&stroke.preview, None);
+            preview.append(&stroke.preview, None);
             if opacity < 1.0 {
-                vectors.pop_layer();
+                preview.pop_layer();
             }
-            vectors_pending = true;
+            commands.push(CompositionCommand::StrokePreview(Box::new(viewport_scene(
+                &preview,
+                camera,
+                page_rect,
+                viewport_rect,
+            ))));
         }
-        flush_vectors(
-            &mut commands,
-            &mut vectors,
-            &mut vectors_pending,
-            camera,
-            page_rect,
-            viewport_rect,
-        );
         Composition {
             commands,
             erase_mask: erase
