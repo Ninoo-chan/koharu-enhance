@@ -201,6 +201,11 @@ impl Rasterizer {
                         scaled.append(scene, Some(transform));
                         CompositionCommand::Vector(Box::new(scaled))
                     }
+                    CompositionCommand::StrokePreview(scene) => {
+                        let mut scaled = Scene::new();
+                        scaled.append(scene, Some(transform));
+                        CompositionCommand::StrokePreview(Box::new(scaled))
+                    }
                 })
                 .collect::<Vec<_>>();
             &scaled
