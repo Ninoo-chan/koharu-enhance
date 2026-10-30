@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use koharu_rasterizer::{
-    PreparedGlyph, PreparedGlyphRun, PreparedResource, PreparedScene, PreparedSceneCommand,
-    PathElement, PreparedPath, ResourceId,
+    PathElement, PreparedGlyph, PreparedGlyphRun, PreparedPath, PreparedResource, PreparedScene,
+    PreparedSceneCommand, ResourceId,
 };
 use vello::kurbo::Affine;
 
@@ -413,7 +413,20 @@ fn draw_layout(
             let glyph_transform = font
                 .synthetic_skew()
                 .map(|angle| Affine::skew(-(angle.to_radians().tan() as f64), 0.0).as_coeffs());
-            let synthetic_bold = if font.synthetic_bold() { 1.0 } else { 0.0 };
+            // Faux bold scales with the em size so it reads the same weight at every size; a
+            // fixed one-pixel dilation blobs small text and vanishes on large text.
+            let synthetic_bold = if font.synthetic_bold() {
+                (layout.font_size * 0.03).max(0.25)
+            } else {
+                0.0
+            };
+            // Hinted outlines are grid-fitted per size, so a dilated or skewed copy of them (or a
+            // fill drawn over an unhinted border) no longer lines up and shimmers on the image.
+            let hint = options.hint_glyphs
+                && paint.dilation_px == 0.0
+                && options.stroke.is_none()
+                && !font.synthetic_bold()
+                && font.synthetic_skew().is_none();
             scene
                 .commands
                 .push(PreparedSceneCommand::GlyphRun(PreparedGlyphRun {
@@ -426,7 +439,7 @@ fn draw_layout(
                     // Hinting folds a uniform zoom into `font_size` for crisp fill text, but a
                     // border needs the real transform so its dilation amount stays proportional
                     // to that same zoom instead of being rendered at a fixed pixel size.
-                    hint: options.hint_glyphs && paint.dilation_px == 0.0,
+                    hint,
                     embolden: [synthetic_bold + paint.dilation_px; 2],
                     color: paint.color,
                     glyphs,
@@ -435,19 +448,13 @@ fn draw_layout(
         }
 
         if options.underline && writing_mode == WritingMode::Horizontal && !line.glyphs.is_empty() {
-            let start_x = line
-                .glyphs
-                .first()
-                .map_or(0.0, |glyph| glyph.x_offset);
-            let width = line
-                .glyphs
-                .iter()
-                .map(|glyph| glyph.x_advance)
-                .sum::<f32>();
+            let start_x = line.glyphs.first().map_or(0.0, |glyph| glyph.x_offset);
+            let width = line.glyphs.iter().map(|glyph| glyph.x_advance).sum::<f32>();
             let thickness = (layout.font_size * 0.06).max(1.0);
             let y = line.baseline.1 + (layout.font_size * 0.12).max(1.0);
-            scene.commands.push(PreparedSceneCommand::FillPath(
-                PreparedPath {
+            scene
+                .commands
+                .push(PreparedSceneCommand::FillPath(PreparedPath {
                     fill: koharu_rasterizer::FillRule::NonZero,
                     transform: transform.as_coeffs(),
                     color: paint.color,
@@ -470,8 +477,7 @@ fn draw_layout(
                         ]),
                         PathElement::Close,
                     ],
-                },
-            ));
+                }));
         }
     }
 }

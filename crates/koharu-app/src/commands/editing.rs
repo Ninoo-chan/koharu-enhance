@@ -1,13 +1,15 @@
-use anyhow::Context as _;
+use anyhow::{Context as _, bail};
+use image::{RgbaImage, imageops::FilterType};
 use koharu_desktop::{CanvasState, Desktop};
 use koharu_scene::EntityId;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::State;
+use tauri::{State, WebviewWindow};
+use tauri_runtime_cef::CefRuntime;
 
 use super::{
     ChannelExt as _, Error,
-    canvas::{CanvasChannel, Point},
+    canvas::{CanvasChannel, LayerCommit, Point},
     project::{CurrentProject, Page, Project, Typography},
 };
 pub(crate) async fn synchronize_canvas(
@@ -267,6 +269,91 @@ pub(crate) async fn add_manual_detection_region(
     })
 }
 
+/// Name of the layer created from a picked picture: the cleaned version of the page illustration.
+const IMAGE_LAYER_NAME: &str = "Cleaned illustration";
+
+/// Scales `image` to exactly the page size. A picture whose proportions differ from the page's
+/// is rejected instead of being stretched, so a mismatched file never distorts silently.
+fn fit_to_page(image: RgbaImage, width: u32, height: u32) -> anyhow::Result<RgbaImage> {
+    let (source_width, source_height) = image.dimensions();
+    if width == 0 || height == 0 || source_width == 0 || source_height == 0 {
+        bail!("the page and the image must have positive dimensions");
+    }
+    if (source_width, source_height) == (width, height) {
+        return Ok(image);
+    }
+    let page_ratio = f64::from(width) / f64::from(height);
+    let image_ratio = f64::from(source_width) / f64::from(source_height);
+    if (image_ratio / page_ratio - 1.0).abs() > 0.01 {
+        bail!(
+            "the image is {source_width}x{source_height} but the page is {width}x{height}; \
+             its proportions must match the page"
+        );
+    }
+    Ok(image::imageops::resize(
+        &image,
+        width,
+        height,
+        FilterType::Lanczos3,
+    ))
+}
+
+#[tracing::instrument(
+    target = "koharu_metrics",
+    name = "image_layer_added",
+    skip_all,
+    fields(origin = "user")
+)]
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn add_image_layer(
+    window: WebviewWindow<CefRuntime>,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<Option<LayerCommit>, Error> {
+    let (page, width, height) = {
+        let project = project.project.lock().await;
+        let project = project.as_ref().context("no project is open")?;
+        let page = project
+            .active_page()
+            .context("the project has no active page")?;
+        let size = project.snapshot().page(page)?.page()?;
+        (page, size.width.round() as u32, size.height.round() as u32)
+    };
+    let Some(file) = rfd::AsyncFileDialog::new()
+        .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
+        .set_parent(&window)
+        .pick_file()
+        .await
+    else {
+        return Ok(None);
+    };
+    let path = file.path().to_owned();
+    let image = tokio_rayon::spawn(move || {
+        let image = image::open(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?
+            .to_rgba8();
+        fit_to_page(image, width, height)
+    })
+    .await?;
+    let (commit, layer, page) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let (commit, layer) = project
+            .add_image_layer(page, IMAGE_LAYER_NAME, image)
+            .await?;
+        project.record_commit(&commit);
+        (commit, layer, project.active_page())
+    };
+    let canvas = synchronize_canvas(&desktop, &commit, page).await?;
+    canvas_channel.channel.publish(canvas);
+    Ok(Some(LayerCommit {
+        revision: commit.revision,
+        layer,
+    }))
+}
+
 #[tracing::instrument(
     target = "koharu_metrics",
     name = "detection_regions_deleted",
@@ -427,4 +514,35 @@ pub(crate) async fn redo(
     let canvas = synchronize_canvas(&desktop, &commit, page).await?;
     canvas_channel.channel.publish(canvas);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matching_image_is_kept_as_is() {
+        let image = RgbaImage::from_pixel(40, 60, image::Rgba([1, 2, 3, 255]));
+        let fitted = fit_to_page(image.clone(), 40, 60).unwrap();
+        assert_eq!(fitted, image);
+    }
+
+    #[test]
+    fn image_with_page_proportions_is_scaled_to_the_page() {
+        let image = RgbaImage::from_pixel(20, 30, image::Rgba([9, 9, 9, 255]));
+        let fitted = fit_to_page(image, 40, 60).unwrap();
+        assert_eq!(fitted.dimensions(), (40, 60));
+    }
+
+    #[test]
+    fn image_with_other_proportions_is_rejected() {
+        let image = RgbaImage::new(60, 60);
+        let error = fit_to_page(image, 40, 60).unwrap_err().to_string();
+        assert!(error.contains("proportions"), "{error}");
+    }
+
+    #[test]
+    fn empty_dimensions_are_rejected() {
+        assert!(fit_to_page(RgbaImage::new(10, 10), 0, 10).is_err());
+    }
 }

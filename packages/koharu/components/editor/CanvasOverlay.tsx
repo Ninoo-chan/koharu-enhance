@@ -5,6 +5,7 @@ import { useMemo, useRef } from 'react'
 import { SelectionControls } from '@/components/editor/SelectionControls'
 import { effectiveLayerVisibility, expandLayerSelection, isTextLayer } from '@/lib/document'
 import { controlFrame, cssFrame, selectableLayer, type Camera } from '@/lib/geometry'
+import { ownsRegion, type RegionTool } from '@/lib/regions'
 import type {
   AnalysisRegion,
   EntityId,
@@ -24,7 +25,7 @@ interface CanvasOverlayProps {
   previews: Readonly<Record<EntityId, Frame>>
   draft: Frame | null
   cursor: Point | null
-  showDetectionRegions: boolean
+  regionTool: RegionTool | null
   selectedDetectionRegion: EntityId | null
   detectionDraft: Point[] | null
   detectionDraftInvalid: boolean
@@ -44,7 +45,7 @@ export function CanvasOverlay({
   previews,
   draft,
   cursor,
-  showDetectionRegions,
+  regionTool,
   selectedDetectionRegion,
   detectionDraft,
   detectionDraftInvalid,
@@ -94,8 +95,9 @@ export function CanvasOverlay({
       {automaticRegion && (
         <AutomaticRegionOverlay geometry={automaticRegion.geometry} camera={camera} />
       )}
-      {showDetectionRegions && (
+      {regionTool && (
         <DetectionRegionsOverlay
+          tool={regionTool}
           regions={page.regions}
           camera={camera}
           selected={selectedDetectionRegion}
@@ -190,12 +192,14 @@ function AutomaticRegionOverlay({ geometry, camera }: { geometry: Geometry; came
 }
 
 function DetectionRegionsOverlay({
+  tool,
   regions,
   camera,
   selected,
   draft,
   draftInvalid,
 }: {
+  tool: RegionTool
   regions: AnalysisRegion[]
   camera: Camera
   selected: EntityId | null
@@ -210,14 +214,19 @@ function DetectionRegionsOverlay({
       {regions.map((region) => {
         const isSelected = selected === region.id
         const textRegion = region.kind === 'dev.koharu.region.text'
+        // Regions of the other kind stay visible for reference but fade back: the active tool
+        // cannot select them, and drawing starts straight through them.
+        const owned = ownsRegion(tool, region)
         return (
           <polygon
             key={region.id}
             data-region={region.id}
+            data-owned={owned}
             points={projectedPoints(region.geometry.points, camera)}
             fill={isSelected ? 'var(--primary)' : 'var(--canvas-region-stroke)'}
-            fillOpacity={isSelected ? 0.16 : 0.035}
+            fillOpacity={isSelected ? 0.16 : owned ? 0.035 : 0}
             stroke={isSelected ? 'var(--primary)' : 'var(--canvas-region-stroke)'}
+            strokeOpacity={owned ? 1 : 0.3}
             strokeWidth={isSelected ? 3 : 2}
             strokeDasharray={textRegion ? undefined : '7 5'}
             vectorEffect='non-scaling-stroke'

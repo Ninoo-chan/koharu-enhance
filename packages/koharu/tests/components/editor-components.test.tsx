@@ -679,7 +679,9 @@ describe('greenfield editor', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Brush' }))
     expect(useKoharuStore.getState().tool).toBe('draw')
-    fireEvent.click(screen.getByRole('button', { name: 'Manual detection' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manual section' }))
+    expect(useKoharuStore.getState().tool).toBe('section')
+    fireEvent.click(screen.getByRole('button', { name: 'Manual text/bubble detection' }))
     expect(useKoharuStore.getState().tool).toBe('detection')
     fireEvent.click(screen.getByRole('button', { name: 'Text' }))
     expect(screen.getByTestId('type-inspector')).toBeInTheDocument()
@@ -789,7 +791,7 @@ describe('greenfield editor', () => {
     )
   })
 
-  it('only offers styles and weights available for the selected font family', async () => {
+  it('toggles bold and italic independently, using real faces and forcing missing ones', async () => {
     const user = userEvent.setup()
     installProject()
     const setTypography = vi.spyOn(commands, 'setTypography').mockResolvedValue(null)
@@ -806,44 +808,29 @@ describe('greenfield editor', () => {
         },
         sources: ['system'],
         faces: [
-          {
-            postscript_name: 'NotoSans-Regular',
-            weight: 400,
-            weight_range: null,
-            style: 'normal',
-          },
-          {
-            postscript_name: 'NotoSans-Bold',
-            weight: 700,
-            weight_range: null,
-            style: 'normal',
-          },
-          {
-            postscript_name: 'NotoSans-Italic',
-            weight: 400,
-            weight_range: null,
-            style: 'italic',
-          },
+          { postscript_name: 'NotoSans-Regular', weight: 400, weight_range: null, style: 'normal' },
+          { postscript_name: 'NotoSans-Bold', weight: 700, weight_range: null, style: 'normal' },
         ],
       },
     ])
-    const { unmount } = render(<Inspector />)
-
-    fireEvent.click(screen.getByRole('combobox', { name: 'Font weight' }))
-
-    expect(screen.getByRole('option', { name: '400' })).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: '700' })).toBeInTheDocument()
-    expect(screen.queryByRole('option', { name: '100' })).not.toBeInTheDocument()
-
-    unmount()
     render(<Inspector />)
-    fireEvent.click(screen.getByRole('combobox', { name: 'Font style' }))
-    expect(screen.getByRole('option', { name: 'Regular' })).toBeInTheDocument()
-    await user.click(screen.getByRole('option', { name: 'Italic' }))
+
+    expect(screen.queryByRole('combobox', { name: 'Font weight' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Font weight' }))
     await waitFor(() =>
-      expect(setTypography).toHaveBeenCalledWith([
+      expect(setTypography).toHaveBeenLastCalledWith([
         expect.objectContaining({
-          layer: 'element',
+          typography: expect.objectContaining({ font_weight: 700, font_style: 'normal' }),
+        }),
+      ]),
+    )
+
+    // The family has no italic face: the style is still stored so the renderer can force it.
+    await user.click(screen.getByRole('button', { name: 'Font style' }))
+    await waitFor(() =>
+      expect(setTypography).toHaveBeenLastCalledWith([
+        expect.objectContaining({
           typography: expect.objectContaining({ font_style: 'italic', font_weight: 400 }),
         }),
       ]),
@@ -913,6 +900,53 @@ describe('greenfield editor', () => {
       layers: [...page.layers, secondLayer, artworkLayer, thirdLayer],
     }))
   }
+
+  it('clones only text layers, copying their text and typography beside the original', async () => {
+    installLayerSelectionFixture()
+    const addBox = vi
+      .spyOn(commands, 'addTextBox')
+      .mockResolvedValue({ revision: 2, layer: 'clone' })
+    const setSource = vi.spyOn(commands, 'setSourceText').mockResolvedValue(null)
+    const setTranslation = vi.spyOn(commands, 'setTranslation').mockResolvedValue(null)
+    const setTypography = vi.spyOn(commands, 'setTypography').mockResolvedValue(null)
+    // Nothing selected, so no layer editor is open and each row shows a single clone button.
+    useKoharuStore.setState({ selectedLayers: [] })
+    render(<Inspector />)
+
+    // Three text layers and one artwork layer: only the text layers can be cloned.
+    expect(screen.getAllByRole('button', { name: /^Clone / })).toHaveLength(3)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clone Hello' }))
+
+    await waitFor(() => expect(setTypography).toHaveBeenCalledOnce())
+    expect(addBox).toHaveBeenCalledWith({ x: 34, y: 44, width: 100, height: 50, angle_degrees: 0 })
+    expect(setSource).toHaveBeenCalledWith('clone', 'こんにちは')
+    expect(setTranslation).toHaveBeenCalledWith('clone', 'Hello')
+    expect(setTypography).toHaveBeenCalledWith([
+      { layer: 'clone', typography: textLayer.type === 'text' ? textLayer.typography : null },
+    ])
+    await waitFor(() => expect(useKoharuStore.getState().selectedLayers).toEqual(['clone']))
+  })
+
+  it('adds a picked image as a layer and ignores a dismissed picker', async () => {
+    installProject()
+    useKoharuStore.setState({ selectedLayers: [] })
+    const addImage = vi
+      .spyOn(commands, 'addImageLayer')
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ revision: 2, layer: 'cleaned' })
+    render(<Inspector />)
+    const button = screen.getByRole('button', { name: 'Add image as layer' })
+
+    fireEvent.click(button)
+    await waitFor(() => expect(addImage).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(button).toBeEnabled())
+    expect(useKoharuStore.getState().selectedLayers).toEqual([])
+
+    fireEvent.click(button)
+    await waitFor(() => expect(useKoharuStore.getState().selectedLayers).toEqual(['cleaned']))
+    expect(addImage).toHaveBeenCalledTimes(2)
+  })
 
   it('toggles layers in the selection with ctrl-click', () => {
     installLayerSelectionFixture()

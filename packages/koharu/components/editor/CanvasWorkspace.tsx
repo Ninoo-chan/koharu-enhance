@@ -15,11 +15,8 @@ import {
   controlFrame,
   draftFrame,
   hitTestLayers,
-  isSimplePolygon,
   pagePoint,
   physicalPoint,
-  pointInPolygon,
-  polygonsTouchOrOverlap,
   selectableLayer,
   translateFrames,
 } from '@/lib/geometry'
@@ -33,6 +30,7 @@ import {
   usePage,
   usePages,
 } from '@/lib/queries'
+import { regionAt, regionProblem, type RegionTool } from '@/lib/regions'
 import {
   isBrushTool,
   maxBrushDiameter,
@@ -46,6 +44,11 @@ import { commands, type Frame, type Point, type TransformFrame } from '@koharu/b
 import { Button } from '@koharu/ui/components/button'
 
 const BRUSH_DIAMETER_STEP = 4
+const REGION_DOUBLE_CLICK_MS = 400
+
+function isRegionTool(tool: CanvasTool): tool is RegionTool {
+  return tool === 'section' || tool === 'detection'
+}
 
 const canvasCursors = {
   select: undefined,
@@ -54,6 +57,7 @@ const canvasCursors = {
   eraser: 'none',
   color_picker: 'crosshair',
   remove: 'none',
+  section: 'crosshair',
   detection: 'crosshair',
   pan: 'grab',
 } as const satisfies Record<CanvasTool, string | undefined>
@@ -62,7 +66,7 @@ type Gesture =
   | { kind: 'pan'; pointer: number; start: Point; translation: [number, number] }
   | { kind: 'move'; pointer: number; start: Point; originals: TransformFrame[] }
   | { kind: 'text'; pointer: number; start: Point; frame: Frame }
-  | { kind: 'detection'; pointer: number; points: Point[]; invalid: boolean }
+  | { kind: 'region'; tool: RegionTool; pointer: number; points: Point[]; invalid: boolean }
   | StrokeGesture
 
 interface StrokeGesture {
@@ -102,6 +106,7 @@ export function CanvasWorkspace() {
   const [detectionDraft, setDetectionDraft] = useState<Point[] | null>(null)
   const [detectionDraftInvalid, setDetectionDraftInvalid] = useState(false)
   const [selectedDetectionRegion, setSelectedDetectionRegion] = useState<string | null>(null)
+  const lastRegionClick = useRef<{ id: string; time: number } | null>(null)
   const [hovered, setHovered] = useState<string | null>(null)
   const [cursor, setCursor] = useState<Point | null>(null)
   const colorSampling = useColorSampling()
@@ -233,6 +238,21 @@ export function CanvasWorkspace() {
     setPreviews({})
   }, [canvas, strokeUpdates, transformUpdates])
 
+  const deleteRegion = useCallback(
+    (region: string) => {
+      setSelectedDetectionRegion(null)
+      commitPending.current = true
+      void enqueue(() => call(commands.deleteDetectionRegions, [region]))
+        .then(() => {
+          selectLayers([])
+          return refresh(projectKey, pagesKey, pageKey)
+        })
+        .catch(() => setSelectedDetectionRegion(region))
+        .finally(() => (commitPending.current = false))
+    },
+    [enqueue, selectLayers],
+  )
+
   const fitCanvas = useCallback(() => {
     const element = surface.current
     if (!element || !pageId || pageWidth === undefined || pageHeight === undefined) return
@@ -355,20 +375,11 @@ export function CanvasWorkspace() {
       }
       if (
         (event.key === 'Delete' || event.key === 'Backspace') &&
-        state.tool === 'detection' &&
+        isRegionTool(state.tool) &&
         selectedDetectionRegion
       ) {
         event.preventDefault()
-        const region = selectedDetectionRegion
-        setSelectedDetectionRegion(null)
-        commitPending.current = true
-        void enqueue(() => call(commands.deleteDetectionRegions, [region]))
-          .then(() => {
-            selectLayers([])
-            return refresh(projectKey, pagesKey, pageKey)
-          })
-          .catch(() => setSelectedDetectionRegion(region))
-          .finally(() => (commitPending.current = false))
+        deleteRegion(selectedDetectionRegion)
         return
       }
       if (
@@ -392,7 +403,17 @@ export function CanvasWorkspace() {
         return
       }
       const next = (
-        ['select', 'text', 'draw', 'eraser', 'color_picker', 'remove', 'detection', 'pan'] as const
+        [
+          'select',
+          'text',
+          'draw',
+          'eraser',
+          'color_picker',
+          'remove',
+          'section',
+          'detection',
+          'pan',
+        ] as const
       ).find((action) => state.shortcuts[action] === event.key.toLowerCase())
       if (next) setTool(next)
     }
@@ -417,7 +438,7 @@ export function CanvasWorkspace() {
   }, [
     cancelGesture,
     colorSampling,
-    enqueue,
+    deleteRegion,
     page,
     requestCanvasFit,
     selectLayers,
@@ -426,7 +447,8 @@ export function CanvasWorkspace() {
   ])
 
   useEffect(() => {
-    if (tool !== 'detection') setSelectedDetectionRegion(null)
+    if (!isRegionTool(tool)) setSelectedDetectionRegion(null)
+    lastRegionClick.current = null
   }, [page?.id, tool])
 
   const clientPagePoint = (clientX: number, clientY: number) =>
@@ -498,7 +520,7 @@ export function CanvasWorkspace() {
     } else if (current.kind === 'text') {
       current.frame = draftFrame(current.start, point)
       setDraft(current.frame)
-    } else if (current.kind === 'detection') {
+    } else if (current.kind === 'region') {
       const minimumDistance = 2 / camera.zoom
       for (const candidate of points) {
         const last = current.points.at(-1)
@@ -506,9 +528,7 @@ export function CanvasWorkspace() {
           current.points.push(candidate)
         }
       }
-      current.invalid =
-        !isSimplePolygon(current.points) ||
-        page.regions.some((region) => polygonsTouchOrOverlap(current.points, region.geometry.points))
+      current.invalid = regionProblem(current.tool, current.points, page.regions) !== null
       setDetectionDraft([...current.points])
       setDetectionDraftInvalid(current.invalid)
     } else if (current.kind === 'paint' || current.kind === 'erase' || current.kind === 'inpaint') {
@@ -538,29 +558,36 @@ export function CanvasWorkspace() {
           return refresh(projectKey, pagesKey, pageKey)
         })
         .catch(() => undefined)
-    } else if (current.kind === 'detection') {
+    } else if (current.kind === 'region') {
       setDetectionDraft(null)
       setDetectionDraftInvalid(false)
       if (current.points.length < 3) {
         receiveError(t('tools.detectionTooSmall'))
         return
       }
-      const overlaps = page.regions.some((region) =>
-        polygonsTouchOrOverlap(current.points, region.geometry.points),
-      )
-      if (!isSimplePolygon(current.points)) {
-        receiveError(t('tools.detectionInvalid'))
-        return
-      }
-      if (current.invalid || overlaps) {
-        receiveError(t('tools.detectionOverlap'))
+      const problem = regionProblem(current.tool, current.points, page.regions)
+      if (problem) {
+        receiveError(
+          t(
+            problem === 'invalid'
+              ? 'tools.detectionInvalid'
+              : problem === 'outside'
+                ? 'tools.detectionOutside'
+                : current.tool === 'section'
+                  ? 'tools.sectionOverlap'
+                  : 'tools.detectionOverlap',
+          ),
+        )
         return
       }
       commitPending.current = true
-      void enqueue(() => call(commands.addManualDetectionRegion, current.points))
+      void enqueue(() =>
+        call(commands.addManualDetectionRegion, current.points, current.tool === 'section'),
+      )
         .then((result) => {
           setSelectedDetectionRegion(result.region)
-          selectLayers([result.layer])
+          // Only text detections come with a text layer; a section has none.
+          selectLayers(result.layer ? [result.layer] : [])
           return refresh(projectKey, pagesKey, pageKey)
         })
         .catch((error: unknown) => receiveError(errorMessage(error)))
@@ -576,30 +603,30 @@ export function CanvasWorkspace() {
       const operation =
         current.kind === 'paint'
           ? enqueue(() =>
-            call(commands.commitPaint, current.revision, current.layer, current.points, {
-              diameter: current.diameter,
-              color: current.color!,
-            }),
-          ).then((result) => {
-            selectLayers([result.layer])
-            return refresh(projectKey, pagesKey, pageKey)
-          })
-          : current.kind === 'erase'
-            ? enqueue(() =>
-              call(
-                commands.commitErase,
-                current.revision,
-                current.layer!,
-                current.points,
-                current.diameter,
-              ),
+              call(commands.commitPaint, current.revision, current.layer, current.points, {
+                diameter: current.diameter,
+                color: current.color!,
+              }),
             ).then((result) => {
               selectLayers([result.layer])
               return refresh(projectKey, pagesKey, pageKey)
             })
+          : current.kind === 'erase'
+            ? enqueue(() =>
+                call(
+                  commands.commitErase,
+                  current.revision,
+                  current.layer!,
+                  current.points,
+                  current.diameter,
+                ),
+              ).then((result) => {
+                selectLayers([result.layer])
+                return refresh(projectKey, pagesKey, pageKey)
+              })
             : enqueue(() =>
-              call(commands.commitInpaint, current.revision, current.points, current.diameter),
-            )
+                call(commands.commitInpaint, current.revision, current.points, current.diameter),
+              )
       commitPending.current = true
       void operation
         .catch(() => canvas?.cancelStroke())
@@ -667,17 +694,30 @@ export function CanvasWorkspace() {
               if (!originals.length) return
               gesture.current = { kind: 'move', pointer: event.pointerId, start: point, originals }
               beginTransform(originals)
-            } else if (tool === 'detection') {
-              const existing = page.regions.find((region) =>
-                pointInPolygon(point, region.geometry.points),
-              )
+            } else if (isRegionTool(tool)) {
+              // Each tool only picks its own kind, so a press over the other kind starts a
+              // drawing: sections can be drawn across text and bubbles, and detections across
+              // sections. A second press on the same region within the interval deletes it.
+              const existing = regionAt(tool, page.regions, point)
               if (existing) {
+                const previous = lastRegionClick.current
+                if (
+                  previous?.id === existing.id &&
+                  event.timeStamp - previous.time <= REGION_DOUBLE_CLICK_MS
+                ) {
+                  lastRegionClick.current = null
+                  deleteRegion(existing.id)
+                  return
+                }
+                lastRegionClick.current = { id: existing.id, time: event.timeStamp }
                 setSelectedDetectionRegion(existing.id)
                 return
               }
+              lastRegionClick.current = null
               setSelectedDetectionRegion(null)
               gesture.current = {
-                kind: 'detection',
+                kind: 'region',
+                tool,
                 pointer: event.pointerId,
                 points: [point],
                 invalid: false,
@@ -858,7 +898,7 @@ export function CanvasWorkspace() {
               previews={previews}
               draft={draft}
               cursor={cursor}
-              showDetectionRegions={tool === 'detection'}
+              regionTool={isRegionTool(tool) ? tool : null}
               selectedDetectionRegion={selectedDetectionRegion}
               detectionDraft={detectionDraft}
               detectionDraftInvalid={detectionDraftInvalid}
@@ -1011,7 +1051,7 @@ class FrameCommand<Value> {
   constructor(
     private readonly execute: (value: Value) => void | Promise<unknown>,
     private readonly merge: (current: Value, next: Value) => Value = (_current, next) => next,
-  ) { }
+  ) {}
 
   schedule(value: Value): void {
     this.pending = this.pending === undefined ? value : this.merge(this.pending, value)

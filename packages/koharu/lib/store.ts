@@ -24,6 +24,7 @@ export type CanvasTool =
   | 'eraser'
   | 'color_picker'
   | 'remove'
+  | 'section'
   | 'detection'
   | 'pan'
 export const MIN_BRUSH_DIAMETER = 1
@@ -94,6 +95,7 @@ export const defaultShortcuts: Shortcuts = {
   eraser: 'e',
   color_picker: 'i',
   remove: 'j',
+  section: 'p',
   detection: 'm',
   pan: 'h',
   fit: '0',

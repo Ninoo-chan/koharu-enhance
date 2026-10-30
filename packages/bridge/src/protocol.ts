@@ -48,8 +48,9 @@ export const commands = {
 	setTranslation: (layer: EntityId, text: string | null) => __TAURI_INVOKE<null>("set_translation", { layer, text }),
 	setTypography: (updates: TypographyUpdate[]) => __TAURI_INVOKE<null>("set_typography", { updates: updates.map(i=>({...i,typography:({...i.typography,size:i.typography.size==null?i.typography.size:i.typography.size,stroke_width:i.typography.stroke_width==null?i.typography.stroke_width:i.typography.stroke_width})})) }),
 	setGeometry: (updates: GeometryUpdate[]) => __TAURI_INVOKE<null>("set_geometry", { updates: updates.map(i=>({...i,points:i.points==null?i.points:i.points.map(i=>i)})) }),
-	addManualDetectionRegion: (points: Point[]) => __TAURI_INVOKE<DetectionRegionCommit>("add_manual_detection_region", { points: points.map(i=>i) }),
+	addManualDetectionRegion: (points: Point[], panel: boolean) => __TAURI_INVOKE<DetectionRegionCommit>("add_manual_detection_region", { points: points.map(i=>i), panel }),
 	deleteDetectionRegions: (regions: EntityId[]) => __TAURI_INVOKE<null>("delete_detection_regions", { regions }),
+	addImageLayer: () => __TAURI_INVOKE<LayerCommit | null>("add_image_layer"),
 	setVisibility: (layers: EntityId[], visible: boolean | null, opacity: number | null) => __TAURI_INVOKE<null>("set_visibility", { layers, visible, opacity: opacity==null?opacity:opacity }),
 	deleteLayers: (layers: EntityId[]) => __TAURI_INVOKE<null>("delete_layers", { layers }),
 	moveLayer: (layer: EntityId, parent: EntityId, index: number) => __TAURI_INVOKE<Page>("move_layer", { layer, parent, index }).then((v) => (({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))}) as typeof v)),
@@ -162,7 +163,7 @@ export type DetectionModel = {
 export type DetectionRegionCommit = {
 	revision: Revision,
 	region: EntityId,
-	layer: EntityId,
+	layer: EntityId | null,
 };
 
 export type DeviceResources = {

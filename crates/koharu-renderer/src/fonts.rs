@@ -70,7 +70,10 @@ pub struct Font {
     family_name: String,
     font_name: String,
     post_script_name: String,
-    synthesis: fontique::Synthesis,
+    /// Faux bold requested because the resolved face is lighter than the requested weight.
+    embolden: bool,
+    /// Faux italic/oblique angle requested because the resolved face is upright.
+    skew: Option<f32>,
     shaper_data: Arc<ShaperData>,
     shaper_instance: ShaperInstance,
     shape_plans: Arc<Mutex<VecDeque<Arc<ShapePlan>>>>,
@@ -86,7 +89,8 @@ impl fmt::Debug for Font {
             .field("family_name", &self.family_name)
             .field("font_name", &self.font_name)
             .field("post_script_name", &self.post_script_name)
-            .field("synthesis", &self.synthesis)
+            .field("embolden", &self.embolden)
+            .field("skew", &self.skew)
             .finish_non_exhaustive()
     }
 }
@@ -141,7 +145,8 @@ impl Font {
             family_name,
             font_name,
             post_script_name,
-            synthesis: font.synthesis,
+            embolden: font.synthesis.embolden(),
+            skew: font.synthesis.skew(),
             shaper_data,
             shaper_instance,
             shape_plans: Arc::new(Mutex::new(VecDeque::new())),
@@ -215,11 +220,22 @@ impl Font {
     }
 
     pub(crate) fn synthetic_bold(&self) -> bool {
-        self.synthesis.embolden()
+        self.embolden
     }
 
     pub(crate) fn synthetic_skew(&self) -> Option<f32> {
-        self.synthesis.skew()
+        self.skew
+    }
+
+    /// Replaces the faux bold/italic decision for this face.
+    ///
+    /// Bundled faces are loaded with their own attributes, so fontique never reports a
+    /// synthesis for them. The catalog selection decides afterwards whether the requested
+    /// weight or style actually exists and forces the missing one.
+    fn with_synthesis(mut self, embolden: bool, skew: Option<f32>) -> Self {
+        self.embolden = embolden;
+        self.skew = skew;
+        self
     }
 
     pub(crate) fn skrifa_ref(&self) -> Result<skrifa::FontRef<'_>> {
@@ -744,7 +760,18 @@ impl Fonts {
             && let Some(catalog) = self.catalog.get()
         {
             if let Some(face) = catalog.select(family, attributes) {
-                self.cache.lock().get(&face.post_script_name)
+                // Use the real bold/italic face when the family ships one; otherwise force it.
+                let embolden = attributes.weight.value() >= 600.0 && face.weight < 600;
+                let skew = (attributes.style != FontStyle::Normal
+                    && face.style == CatalogStyle::Normal)
+                    .then(|| match attributes.style {
+                        FontStyle::Oblique(Some(angle)) => angle,
+                        _ => 14.0,
+                    });
+                self.cache
+                    .lock()
+                    .get(&face.post_script_name)
+                    .map(|font| font.with_synthesis(embolden, skew))
             } else {
                 None
             }

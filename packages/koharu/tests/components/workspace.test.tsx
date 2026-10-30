@@ -6,6 +6,7 @@ import { CanvasWorkspace } from '@/components/editor/CanvasWorkspace'
 import { pageKey, pagesKey, projectKey, queryClient } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import { commands, type Layer } from '@koharu/bridge/protocol'
+import { toast } from '@koharu/ui/components/toast'
 import { TooltipProvider } from '@koharu/ui/components/tooltip'
 
 const canvas = vi.hoisted(() => ({
@@ -503,7 +504,46 @@ describe('canvas interaction adapter', () => {
     })
   })
 
-  it('draws a manual detection region and blocks overlap with existing regions', async () => {
+  const square = (x: number, y: number, size: number) => [
+    { x, y },
+    { x: x + size, y },
+    { x: x + size, y: y + size },
+    { x, y: y + size },
+  ]
+
+  const setRegions = (
+    regions: { id: string; kind: string; points: { x: number; y: number }[] }[],
+  ) =>
+    queryClient.setQueryData(pageKey, (page: object) => ({
+      ...page,
+      regions: regions.map(({ id, kind, points }) => ({
+        id,
+        parent: 'page',
+        geometry: { points },
+        kind,
+        label: null,
+      })),
+    }))
+
+  // The surface is offset by (10, 20), so a client point (cx, cy) is the page point (cx-10, cy-20).
+  const drawSquare = (
+    surface: HTMLElement,
+    pointerId: number,
+    left: number,
+    top: number,
+    size: number,
+  ) => {
+    fireEvent.pointerDown(surface, { button: 0, pointerId, clientX: left + 10, clientY: top + 20 })
+    fireEvent.pointerMove(surface, { pointerId, clientX: left + size + 10, clientY: top + 20 })
+    fireEvent.pointerMove(surface, {
+      pointerId,
+      clientX: left + size + 10,
+      clientY: top + size + 20,
+    })
+    fireEvent.pointerUp(surface, { pointerId, clientX: left + 10, clientY: top + size + 20 })
+  }
+
+  it('draws a text/bubble detection across a section but not over another detection', async () => {
     installProject()
     useKoharuStore.setState({
       tool: 'detection',
@@ -512,48 +552,108 @@ describe('canvas interaction adapter', () => {
     const addRegion = vi
       .spyOn(commands, 'addManualDetectionRegion')
       .mockResolvedValue({ revision: 2, region: 'manual-region', layer: 'manual-layer' })
+    setRegions([
+      { id: 'section', kind: 'dev.koharu.region.panel', points: square(0, 0, 300) },
+      { id: 'text', kind: 'dev.koharu.region.text', points: square(200, 200, 60) },
+    ])
     const surface = renderWorkspace()
 
-    fireEvent.pointerDown(surface, { button: 0, pointerId: 20, clientX: 20, clientY: 30 })
-    fireEvent.pointerMove(surface, { pointerId: 20, clientX: 50, clientY: 30 })
-    fireEvent.pointerMove(surface, { pointerId: 20, clientX: 50, clientY: 60 })
-    fireEvent.pointerUp(surface, { pointerId: 20, clientX: 20, clientY: 60 })
-
+    // The press lands on the section, which this tool does not pick, so it starts drawing.
+    drawSquare(surface, 20, 10, 10, 60)
     await waitFor(() => expect(addRegion).toHaveBeenCalledOnce())
-    expect(addRegion).toHaveBeenCalledWith([
-      { x: 10, y: 10 },
-      { x: 40, y: 10 },
-      { x: 40, y: 40 },
-      { x: 10, y: 40 },
-    ])
+    expect(addRegion).toHaveBeenCalledWith(square(10, 10, 60), false)
     expect(useKoharuStore.getState().selectedLayers).toEqual(['manual-layer'])
-
     addRegion.mockClear()
-    queryClient.setQueryData(pageKey, (page: { regions: unknown[] }) => ({
-      ...page,
-      regions: [
-        {
-          id: 'existing-region',
-          parent: 'page',
-          geometry: {
-            points: [
-              { x: 50, y: 50 },
-              { x: 80, y: 50 },
-              { x: 80, y: 80 },
-              { x: 50, y: 80 },
-            ],
-          },
-          kind: 'dev.koharu.region.text',
-          label: null,
-        },
-      ],
-    }))
+  })
 
-    fireEvent.pointerDown(surface, { button: 0, pointerId: 21, clientX: 50, clientY: 90 })
-    fireEvent.pointerMove(surface, { pointerId: 21, clientX: 70, clientY: 90 })
-    fireEvent.pointerMove(surface, { pointerId: 21, clientX: 70, clientY: 110 })
-    fireEvent.pointerUp(surface, { pointerId: 21, clientX: 50, clientY: 110 })
+  it.each([
+    ['overlapping another text or bubble detection', 180, 180, /touch or overlap/i],
+    ['leaving every section', 400, 400, /inside a section/i],
+  ])('rejects a detection %s', (_name, left, top, message) => {
+    installProject()
+    useKoharuStore.setState({
+      tool: 'detection',
+      camera: { zoom: 1, translation: [0, 0], fitted: false },
+    })
+    const addRegion = vi.spyOn(commands, 'addManualDetectionRegion')
+    const notify = vi.spyOn(toast, 'add')
+    setRegions([
+      { id: 'section', kind: 'dev.koharu.region.panel', points: square(0, 0, 300) },
+      { id: 'text', kind: 'dev.koharu.region.text', points: square(200, 200, 60) },
+    ])
+
+    drawSquare(renderWorkspace(), 21, left, top, 60)
 
     expect(addRegion).not.toHaveBeenCalled()
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'error', description: expect.stringMatching(message) }),
+    )
+  })
+
+  it('draws a section across text and bubbles but not over another section', async () => {
+    installProject()
+    useKoharuStore.setState({
+      tool: 'section',
+      camera: { zoom: 1, translation: [0, 0], fitted: false },
+    })
+    const addRegion = vi
+      .spyOn(commands, 'addManualDetectionRegion')
+      .mockResolvedValue({ revision: 2, region: 'manual-section', layer: null })
+    setRegions([
+      { id: 'other-section', kind: 'dev.koharu.region.panel', points: square(300, 0, 100) },
+      { id: 'bubble', kind: 'dev.koharu.region.bubble', points: square(40, 40, 60) },
+    ])
+    const surface = renderWorkspace()
+
+    // The press lands on a bubble, which this tool does not pick, so it starts drawing.
+    drawSquare(surface, 30, 50, 50, 120)
+    await waitFor(() => expect(addRegion).toHaveBeenCalledOnce())
+    expect(addRegion).toHaveBeenCalledWith(square(50, 50, 120), true)
+    expect(useKoharuStore.getState().selectedLayers).toEqual([])
+  })
+
+  it('rejects a section that overlaps another section', () => {
+    installProject()
+    useKoharuStore.setState({
+      tool: 'section',
+      camera: { zoom: 1, translation: [0, 0], fitted: false },
+    })
+    const addRegion = vi.spyOn(commands, 'addManualDetectionRegion')
+    const notify = vi.spyOn(toast, 'add')
+    setRegions([{ id: 'other', kind: 'dev.koharu.region.panel', points: square(300, 0, 100) }])
+
+    drawSquare(renderWorkspace(), 31, 250, 20, 100)
+
+    expect(addRegion).not.toHaveBeenCalled()
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'error',
+        description: expect.stringMatching(/section cannot touch or overlap/i),
+      }),
+    )
+  })
+
+  it('deletes a region of the active kind on a double left click', async () => {
+    installProject()
+    useKoharuStore.setState({
+      tool: 'section',
+      camera: { zoom: 1, translation: [0, 0], fitted: false },
+    })
+    const remove = vi.spyOn(commands, 'deleteDetectionRegions').mockResolvedValue(null)
+    setRegions([
+      { id: 'section', kind: 'dev.koharu.region.panel', points: square(0, 0, 300) },
+      { id: 'text', kind: 'dev.koharu.region.text', points: square(20, 20, 60) },
+    ])
+    const surface = renderWorkspace()
+
+    // A single press only selects the section; the text region on top is not this tool's kind.
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 40, clientX: 40, clientY: 50 })
+    fireEvent.pointerUp(surface, { pointerId: 40, clientX: 40, clientY: 50 })
+    expect(remove).not.toHaveBeenCalled()
+
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 41, clientX: 40, clientY: 50 })
+    fireEvent.pointerUp(surface, { pointerId: 41, clientX: 40, clientY: 50 })
+    await waitFor(() => expect(remove).toHaveBeenCalledOnce())
+    expect(remove).toHaveBeenCalledWith(['section'])
   })
 })

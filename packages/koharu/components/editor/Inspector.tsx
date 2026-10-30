@@ -10,10 +10,12 @@ import {
   Bold,
   Brush,
   ChevronDown,
+  Copy,
   Eye,
   EyeOff,
   Folder,
   Image as ImageIcon,
+  ImagePlus,
   Italic,
   Layers3,
   Lock,
@@ -38,6 +40,7 @@ import {
   isTextLayer,
   layerChildren,
 } from '@/lib/document'
+import { layerFrame } from '@/lib/geometry'
 import { pageKey, projectKey, queryClient, refresh, useFonts, usePage } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import { previewCanvasOpacity } from '@koharu/bridge/canvas'
@@ -146,25 +149,46 @@ function TypeInspector() {
     layer: EntityId
     typography: Typography
   } | null>(null)
-  const updateSequence = useRef(0)
+  // Typography changes (a size slider drag fires dozens per second) go through one ordered queue:
+  // at most one request is in flight and only the newest pending value is kept, so the canvas
+  // re-lays out the latest size instead of replaying every intermediate one out of order.
+  const inFlight = useRef(false)
+  const queued = useRef<{ layer: EntityId; typography: Typography }[] | null>(null)
+  const latest = useRef(new Map<EntityId, Typography>())
 
   useEffect(() => setDraft(null), [current?.id])
 
+  const flush = async () => {
+    if (inFlight.current) return
+    inFlight.current = true
+    try {
+      while (queued.current) {
+        const updates = queued.current
+        queued.current = null
+        await call(commands.setTypography, updates)
+          .then(() => refresh(projectKey, pageKey))
+          .catch(() => undefined)
+      }
+    } finally {
+      inFlight.current = false
+      latest.current.clear()
+      setDraft(null)
+    }
+  }
+
   const apply = (update: (value: Typography) => Typography) => {
     if (!selected.length) return
-    const updates = selected.map((layer) => ({
-      layer: layer.id,
-      typography: update(layer.typography ?? defaultTypography),
-    }))
+    const updates = selected.map((layer) => {
+      // Build on the newest pending value so quick consecutive edits (size, then bold) compose.
+      const base = latest.current.get(layer.id) ?? layer.typography ?? defaultTypography
+      const typography = update(base)
+      latest.current.set(layer.id, typography)
+      return { layer: layer.id, typography }
+    })
     const optimistic = current && updates.find(({ layer }) => layer === current.id)
     if (optimistic) setDraft(optimistic)
-    const sequence = ++updateSequence.current
-    void call(commands.setTypography, updates)
-      .then(() => refresh(projectKey, pageKey))
-      .catch(() => undefined)
-      .finally(() => {
-        if (updateSequence.current === sequence) setDraft(null)
-      })
+    queued.current = updates
+    void flush()
   }
 
   const typography =
@@ -181,13 +205,12 @@ function TypeInspector() {
       : [...available, defaultFont]
   }, [availableFonts])
   const size = Math.round((typography.size ?? 24) * 100) / 100
-  const weight = typography.font_weight ?? 400
   const selectedFamily = findFontFamily(families, typography.preferred_font ?? defaultFont.name)
-  const styles = usableFontStyles(selectedFamily)
-  const style = styles.includes(typography.font_style ?? 'normal')
-    ? (typography.font_style ?? 'normal')
-    : (styles[0] ?? 'normal')
-  const weights = usableFontWeights(selectedFamily, style)
+  // Bold and italic are independent toggles. The renderer uses the family's real bold/italic face
+  // when it has one and synthesizes the missing one, so the stored weight and style are the user's
+  // intent and are never snapped to what the family happens to ship.
+  const bold = (typography.font_weight ?? 400) >= 600
+  const italic = typography.font_style === 'italic' || typography.font_style === 'oblique'
   const strokeWidth = typography.stroke_width ?? 0
   const strokeColor = typography.stroke_color ?? defaultTypography.stroke_color!
   const strokeEnabled = strokeWidth > 0 && strokeColor[3] > 0
@@ -209,15 +232,16 @@ function TypeInspector() {
               size='sm'
               onChange={(preferred_font) => {
                 const family = findFontFamily(families, preferred_font)
-                const nextStyles = usableFontStyles(family)
-                const fontStyle = nextStyles.includes(style) ? style : (nextStyles[0] ?? 'normal')
-                const nextWeights = usableFontWeights(family, fontStyle)
-                const fontWeight = nearestFontWeight(nextWeights, weight)
                 apply((value) => ({
                   ...value,
                   preferred_font,
-                  font_weight: fontWeight,
-                  font_style: fontStyle,
+                  // Keep the bold/italic intent, resolved to this family's real faces if it has them.
+                  font_weight:
+                    value.font_weight && value.font_weight >= 600 ? boldWeight(family) : 400,
+                  font_style:
+                    value.font_style && value.font_style !== 'normal'
+                      ? italicStyle(family)
+                      : 'normal',
                 }))
               }}
             />
@@ -233,50 +257,21 @@ function TypeInspector() {
           </InspectorField>
         </div>
 
-        <div className='grid min-w-0 grid-cols-[minmax(0,1fr)_4.25rem] gap-1.5'>
-          <InspectorField label={t('inspector.size')}>
-            <FontSizeField
-              disabled={disabled}
-              value={size}
-              autoFit={typography.auto_fit}
-              onChange={(next) => apply((value) => ({ ...value, size: next, auto_fit: false }))}
-              onAutoFit={() =>
-                apply((value) => ({
-                  ...value,
-                  size: value.size ?? size,
-                  auto_fit: true,
-                }))
-              }
-            />
-          </InspectorField>
-          <InspectorField label={t('inspector.weight')}>
-            <Select
-              disabled={disabled}
-              value={String(weight)}
-              onValueChange={(font_weight) =>
-                apply((value) => ({
-                  ...value,
-                  font_weight: Number(font_weight),
-                }))
-              }
-            >
-              <SelectTrigger
-                size='sm'
-                aria-label={t('inspector.fontWeight')}
-                className='w-full min-w-0'
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {weights.map((value) => (
-                  <SelectItem key={value} value={String(value)}>
-                    {value}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </InspectorField>
-        </div>
+        <InspectorField label={t('inspector.size')}>
+          <FontSizeField
+            disabled={disabled}
+            value={size}
+            autoFit={typography.auto_fit}
+            onChange={(next) => apply((value) => ({ ...value, size: next, auto_fit: false }))}
+            onAutoFit={() =>
+              apply((value) => ({
+                ...value,
+                size: value.size ?? size,
+                auto_fit: true,
+              }))
+            }
+          />
+        </InspectorField>
 
         <div className='flex items-end gap-1.5'>
           <InspectorField label={t('inspector.weight')}>
@@ -288,14 +283,16 @@ function TypeInspector() {
                     variant='outline'
                     size='icon-sm'
                     aria-label={t('inspector.fontWeight')}
-                    aria-pressed={weight >= 600}
+                    aria-pressed={bold}
                     disabled={disabled}
-                    data-active={weight >= 600}
+                    data-active={bold}
                     className='data-[active=true]:border-primary data-[active=true]:bg-accent data-[active=true]:text-accent-foreground'
-                    onClick={() => {
-                      const nextWeight = weight >= 600 ? 400 : nearestFontWeight(weights, 700)
-                      apply((value) => ({ ...value, font_weight: nextWeight }))
-                    }}
+                    onClick={() =>
+                      apply((value) => ({
+                        ...value,
+                        font_weight: bold ? 400 : boldWeight(selectedFamily),
+                      }))
+                    }
                   />
                 }
               >
@@ -313,26 +310,16 @@ function TypeInspector() {
                     variant='outline'
                     size='icon-sm'
                     aria-label={t('inspector.fontStyle')}
-                    aria-pressed={style === 'italic' || style === 'oblique'}
+                    aria-pressed={italic}
                     disabled={disabled}
-                    data-active={style === 'italic' || style === 'oblique'}
+                    data-active={italic}
                     className='data-[active=true]:border-primary data-[active=true]:bg-accent data-[active=true]:text-accent-foreground'
-                    onClick={() => {
-                      const active = style === 'italic' || style === 'oblique'
-                      const nextStyle = active
-                        ? 'normal'
-                        : styles.includes('italic')
-                          ? 'italic'
-                          : styles.includes('oblique')
-                            ? 'oblique'
-                            : 'normal'
-                      const nextWeights = usableFontWeights(selectedFamily, nextStyle)
+                    onClick={() =>
                       apply((value) => ({
                         ...value,
-                        font_style: nextStyle,
-                        font_weight: nearestFontWeight(nextWeights, weight),
+                        font_style: italic ? 'normal' : italicStyle(selectedFamily),
                       }))
-                    }}
+                    }
                   />
                 }
               >
@@ -499,37 +486,27 @@ function findFontFamily(families: FontFamily[], name: string): FontFamily | unde
   return families.find((family) => normalizeFontName(family.name) === normalizeFontName(name))
 }
 
-function usableFontStyles(family: FontFamily | undefined): FontStyle[] {
-  if (!family) return ['normal']
-  const styles = new Set(family.faces.map((font) => font.style))
-  const available = (['normal', 'italic', 'oblique'] satisfies FontStyle[]).filter((style) =>
-    styles.has(style),
+/** The family's real bold weight nearest 700, or 700 when it has none (the renderer fakes it). */
+function boldWeight(family: FontFamily | undefined): number {
+  const bolds =
+    family?.faces.flatMap((face) => {
+      const range = face.weight_range
+      if (!range) return face.weight >= 600 ? [face.weight] : []
+      // A variable face reaches 700 when its axis covers it; otherwise its heaviest weight.
+      return range.maximum >= 600 ? [Math.min(Math.max(700, range.minimum), range.maximum)] : []
+    }) ?? []
+  if (!bolds.length) return 700
+  return bolds.reduce((nearest, weight) =>
+    Math.abs(weight - 700) < Math.abs(nearest - 700) ? weight : nearest,
   )
-  return available.length ? available : ['normal']
 }
 
-function usableFontWeights(family: FontFamily | undefined, style: FontStyle): number[] {
-  if (!family) return [400]
-  const styled = family.faces.filter((font) => font.style === style)
-  const faces = styled.length ? styled : family.faces
-  const weights = new Set(faces.map((font) => font.weight))
-  for (const face of faces) {
-    if (!face.weight_range) continue
-    weights.add(face.weight_range.minimum)
-    weights.add(face.weight_range.maximum)
-    for (let weight = 100; weight <= 900; weight += 100) {
-      if (weight >= face.weight_range.minimum && weight <= face.weight_range.maximum) {
-        weights.add(weight)
-      }
-    }
-  }
-  return [...weights].sort((left, right) => left - right)
-}
-
-function nearestFontWeight(weights: number[], target: number): number {
-  return weights.reduce((nearest, weight) =>
-    Math.abs(weight - target) < Math.abs(nearest - target) ? weight : nearest,
-  )
+/** The family's real italic/oblique style, or 'italic' when it has none (the renderer fakes it). */
+function italicStyle(family: FontFamily | undefined): FontStyle {
+  const styles = new Set(family?.faces.map((face) => face.style))
+  if (styles.has('italic')) return 'italic'
+  if (styles.has('oblique')) return 'oblique'
+  return 'italic'
 }
 
 function normalizeFontName(value: string): string {
@@ -551,6 +528,49 @@ function displayedLayers(layers: Layer[], page: EntityId) {
   return rows
 }
 
+type TextLayer = Extract<Layer, { type: 'text' }>
+
+const CLONE_OFFSET = 24
+
+/**
+ * Text layers have no native clone, so the copy is composed from the commands that already
+ * create a text layer and set its text and typography. It lands beside the original so both
+ * stay visible, flipping the offset when it would leave the page.
+ */
+async function cloneTextLayer(
+  source: TextLayer,
+  pageSize: { width: number; height: number },
+): Promise<EntityId> {
+  const frame = useKoharuStore.getState().layerFrames[source.id] ?? layerFrame(source)
+  const created = !frame
+    ? await call(commands.addPointText, { x: pageSize.width / 2, y: pageSize.height / 2 })
+    : source.layout === 'point'
+      ? await call(commands.addPointText, {
+          x: nudge(frame.x, frame.width, pageSize.width),
+          y: nudge(frame.y, frame.height, pageSize.height),
+        })
+      : await call(commands.addTextBox, {
+          ...frame,
+          x: nudge(frame.x, frame.width, pageSize.width),
+          y: nudge(frame.y, frame.height, pageSize.height),
+        })
+  const layer = created.layer
+  if (source.content.source) await call(commands.setSourceText, layer, source.content.source.text)
+  if (source.content.translation) {
+    await call(commands.setTranslation, layer, source.content.translation.text)
+  }
+  if (source.typography) {
+    await call(commands.setTypography, [{ layer, typography: source.typography }])
+  }
+  return layer
+}
+
+function nudge(start: number, length: number, limit: number): number {
+  return start + CLONE_OFFSET + length > limit
+    ? Math.max(start - CLONE_OFFSET, 0)
+    : start + CLONE_OFFSET
+}
+
 function LayersInspector() {
   const { t } = useTranslation()
   const page = usePage().data
@@ -560,6 +580,8 @@ function LayersInspector() {
     selected.length === 1 ? (selected[0] ?? null) : null,
   )
   const [movingLayer, setMovingLayer] = useState<EntityId | null>(null)
+  const [cloning, setCloning] = useState(false)
+  const [addingImage, setAddingImage] = useState(false)
   const anchor = useRef<EntityId | null>(null)
 
   useEffect(() => {
@@ -609,6 +631,34 @@ function LayersInspector() {
       })
       .catch(() => undefined)
 
+  const cloneLayer = (layer: TextLayer) => {
+    if (cloning || !page) return
+    setCloning(true)
+    void cloneTextLayer(layer, page.size)
+      .then(async (clone) => {
+        await refresh(projectKey, pageKey)
+        selectLayers([clone])
+        setExpandedLayer(clone)
+      })
+      .catch(() => refresh(projectKey, pageKey))
+      .finally(() => setCloning(false))
+  }
+
+  // The native command opens the file picker and resolves to null when it is dismissed.
+  const addImageLayer = () => {
+    if (addingImage) return
+    setAddingImage(true)
+    void call(commands.addImageLayer)
+      .then(async (added) => {
+        if (!added) return
+        await refresh(projectKey, pageKey)
+        selectLayers([added.layer])
+        setExpandedLayer(added.layer)
+      })
+      .catch(() => undefined)
+      .finally(() => setAddingImage(false))
+  }
+
   // Modifier semantics mirror the page rail: ctrl/meta toggles, shift selects a display range.
   const selectLayer = (layer: EntityId, additive: boolean, range: boolean) => {
     if (!additive && !range) {
@@ -652,6 +702,24 @@ function LayersInspector() {
         <span className='text-[9px] text-muted-foreground tabular-nums'>
           {page.layers.filter((layer) => !isGroupLayer(layer)).length}
         </span>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type='button'
+                variant='ghost'
+                size='icon-xs'
+                aria-label={t('layers.addImage')}
+                disabled={addingImage}
+                className='ml-auto size-5 rounded-md text-muted-foreground hover:text-foreground'
+                onClick={addImageLayer}
+              />
+            }
+          >
+            <ImagePlus className='size-3' />
+          </TooltipTrigger>
+          <TooltipContent side='left'>{t('layers.addImage')}</TooltipContent>
+        </Tooltip>
       </header>
 
       <ScrollArea className='min-h-0 flex-1'>
@@ -691,6 +759,8 @@ function LayersInspector() {
                 canMoveDown={!locked && position >= 0 && position < siblings.length - 1}
                 reordering={movingLayer !== null}
                 onDelete={isGroupLayer(layer) ? undefined : () => deleteLayer(layer.id)}
+                onClone={isTextLayer(layer) && !locked ? () => cloneLayer(layer) : undefined}
+                cloning={cloning}
               />
             )
           })}
@@ -715,6 +785,8 @@ function LayerRow({
   canMoveDown,
   reordering,
   onDelete,
+  onClone,
+  cloning,
 }: {
   layer: Layer
   index: number
@@ -729,6 +801,8 @@ function LayerRow({
   canMoveDown: boolean
   reordering: boolean
   onDelete?: () => void
+  onClone?: () => void
+  cloning: boolean
 }) {
   const { t } = useTranslation()
   const name = localizedLayerName(layer, index, t)
@@ -803,25 +877,39 @@ function LayerRow({
               <TooltipContent side='left'>{t('layers.locked')}</TooltipContent>
             </Tooltip>
           ) : (
-            <button
-              type='button'
-              aria-label={
-                layer.visibility.visible ? t('layers.hide', { name }) : t('layers.show', { name })
-              }
-              className='grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/25'
-              onClick={onToggle}
-            >
-              {layer.visibility.visible ? (
-                <Eye className='size-3.5' />
-              ) : (
-                <EyeOff className='size-3.5' />
+            <>
+              {onClone && (
+                <button
+                  type='button'
+                  aria-label={t('layers.clone', { name })}
+                  title={t('layers.clone', { name })}
+                  disabled={cloning}
+                  className='grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/25 disabled:pointer-events-none disabled:opacity-40'
+                  onClick={onClone}
+                >
+                  <Copy className='size-3.5' />
+                </button>
               )}
-            </button>
+              <button
+                type='button'
+                aria-label={
+                  layer.visibility.visible ? t('layers.hide', { name }) : t('layers.show', { name })
+                }
+                className='grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/25'
+                onClick={onToggle}
+              >
+                {layer.visibility.visible ? (
+                  <Eye className='size-3.5' />
+                ) : (
+                  <EyeOff className='size-3.5' />
+                )}
+              </button>
+            </>
           )}
         </div>
         {expanded && (
           <div className='animate-in duration-150 fade-in slide-in-from-top-1 motion-reduce:animate-none'>
-            <LayerEditor layer={layer} onDelete={onDelete} />
+            <LayerEditor layer={layer} onDelete={onDelete} onClone={onClone} cloning={cloning} />
           </div>
         )}
       </div>
@@ -829,7 +917,17 @@ function LayerRow({
   )
 }
 
-function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void }) {
+function LayerEditor({
+  layer,
+  onDelete,
+  onClone,
+  cloning,
+}: {
+  layer: Layer
+  onDelete?: () => void
+  onClone?: () => void
+  cloning: boolean
+}) {
   const { t } = useTranslation()
   const translationFocusLayer = useKoharuStore((state) => state.translationFocusLayer)
   const clearTranslationFocus = useKoharuStore((state) => state.clearTranslationFocus)
@@ -882,6 +980,26 @@ function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void 
             {Math.round(opacity)}%
           </span>
         </div>
+        {onClone && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon-xs'
+                  aria-label={t('layers.clone', { name })}
+                  disabled={cloning}
+                  className='size-5 rounded-md text-muted-foreground hover:text-foreground'
+                  onClick={onClone}
+                />
+              }
+            >
+              <Copy className='size-3' />
+            </TooltipTrigger>
+            <TooltipContent side='left'>{t('layers.clone', { name })}</TooltipContent>
+          </Tooltip>
+        )}
         {onDelete && (
           <Tooltip>
             <TooltipTrigger
@@ -986,6 +1104,8 @@ function InspectorField({ label, children }: { label: string; children: React.Re
 }
 
 const fontSizePresets = [8, 9, 10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64, 72, 96]
+// Slider span; the number field still accepts anything from 0.5 to 300.
+const fontSizeSliderRange = [6, 120] as const
 
 function FontSizeField({
   value,
@@ -1003,10 +1123,19 @@ function FontSizeField({
   const { t } = useTranslation()
   const id = useId()
   const [draft, setDraft] = useState<number | null>(value)
+  // While the slider is being dragged the field follows the thumb, not the (older) saved size
+  // that a finished render reports back.
+  const dragging = useRef(false)
 
   useEffect(() => {
-    setDraft(autoFit ? null : value)
+    if (!dragging.current) setDraft(autoFit ? null : value)
   }, [autoFit, value])
+
+  const slide = (next: number) => {
+    dragging.current = true
+    setDraft(next)
+    onChange(next)
+  }
 
   const select = (choice: string) => {
     if (choice === 'auto') {
@@ -1030,55 +1159,73 @@ function FontSizeField({
   }
 
   return (
-    <NumberField
-      id={id}
-      name='font-size'
-      className='min-w-0'
-      disabled={disabled}
-      value={draft}
-      min={0.5}
-      max={300}
-      step={0.5}
-      onValueChange={setDraft}
-      onValueCommitted={commit}
-    >
-      <NumberFieldGroup>
-        <NumberFieldInput
-          data-testid='type-size'
-          aria-label={t('inspector.fontSize')}
-          placeholder={t('inspector.auto')}
-          className='px-2 text-left'
-        />
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            disabled={disabled}
-            aria-label={t('inspector.chooseFontSize')}
-            className='grid size-6 shrink-0 place-items-center border-l border-input text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground disabled:pointer-events-none disabled:opacity-40'
-          >
-            <ChevronDown className='size-3' />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align='end'
-            className='w-28 min-w-28 border border-border/50 p-0.5 shadow-sm ring-0'
-          >
-            <DropdownMenuRadioGroup value={autoFit ? 'auto' : String(value)} onValueChange={select}>
-              <DropdownMenuRadioItem value='auto' className='min-h-6 py-0.5 text-[10px]'>
-                {t('inspector.auto')}
-              </DropdownMenuRadioItem>
-              {fontSizePresets.map((size) => (
-                <DropdownMenuRadioItem
-                  key={size}
-                  value={String(size)}
-                  className='min-h-6 py-0.5 text-[10px] tabular-nums'
-                >
-                  {size}
+    <div className='flex min-w-0 items-center gap-2'>
+      <NumberField
+        id={id}
+        name='font-size'
+        className='w-[4.75rem] shrink-0'
+        disabled={disabled}
+        value={draft}
+        min={0.5}
+        max={300}
+        step={0.5}
+        onValueChange={setDraft}
+        onValueCommitted={commit}
+      >
+        <NumberFieldGroup>
+          <NumberFieldInput
+            data-testid='type-size'
+            aria-label={t('inspector.fontSize')}
+            placeholder={t('inspector.auto')}
+            className='px-2 text-left'
+          />
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              disabled={disabled}
+              aria-label={t('inspector.chooseFontSize')}
+              className='grid size-6 shrink-0 place-items-center border-l border-input text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground disabled:pointer-events-none disabled:opacity-40'
+            >
+              <ChevronDown className='size-3' />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align='end'
+              className='w-14 min-w-14 border border-border/50 p-0.5 shadow-sm ring-0'
+            >
+              <DropdownMenuRadioGroup
+                value={autoFit ? 'auto' : String(value)}
+                onValueChange={select}
+              >
+                <DropdownMenuRadioItem value='auto' className='min-h-6 py-0.5 text-[10px]'>
+                  {t('inspector.auto')}
                 </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </NumberFieldGroup>
-    </NumberField>
+                {fontSizePresets.map((size) => (
+                  <DropdownMenuRadioItem
+                    key={size}
+                    value={String(size)}
+                    className='min-h-6 py-0.5 text-[10px] tabular-nums'
+                  >
+                    {size}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </NumberFieldGroup>
+      </NumberField>
+      <Slider
+        aria-label={t('inspector.fontSize')}
+        disabled={disabled}
+        min={fontSizeSliderRange[0]}
+        max={fontSizeSliderRange[1]}
+        step={1}
+        value={Math.min(Math.max(draft ?? value, fontSizeSliderRange[0]), fontSizeSliderRange[1])}
+        className='min-w-0 flex-1 [&_[data-slot=slider-thumb]]:size-2.5'
+        onValueChange={slide}
+        onValueCommitted={() => {
+          dragging.current = false
+        }}
+      />
+    </div>
   )
 }
 

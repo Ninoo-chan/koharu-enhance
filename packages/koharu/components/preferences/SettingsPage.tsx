@@ -346,6 +346,8 @@ const shortcutKeys: Record<ShortcutAction, string> = {
   eraser: 'tools.eraser',
   color_picker: 'tools.color_picker',
   remove: 'tools.remove',
+  section: 'tools.section',
+  detection: 'tools.detection',
   pan: 'tools.pan',
   fit: 'canvas.fit',
 }

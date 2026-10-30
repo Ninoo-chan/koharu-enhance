@@ -84,6 +84,7 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             editing::set_geometry,
             editing::add_manual_detection_region,
             editing::delete_detection_regions,
+            editing::add_image_layer,
             editing::set_visibility,
             editing::delete_layers,
             editing::move_layer,

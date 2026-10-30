@@ -4,6 +4,7 @@ import {
   Brush,
   Eraser,
   Hand,
+  LayoutPanelTop,
   Spline,
   Minus,
   MousePointer2,
@@ -47,6 +48,7 @@ const tools = [
   ['eraser', Eraser],
   ['color_picker', Pipette],
   ['remove', Sparkles],
+  ['section', LayoutPanelTop],
   ['detection', Spline],
   ['pan', Hand],
 ] as const satisfies ReadonlyArray<readonly [CanvasTool, typeof MousePointer2]>

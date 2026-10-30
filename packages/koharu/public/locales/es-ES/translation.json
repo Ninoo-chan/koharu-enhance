@@ -214,6 +214,8 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "addImage": "Añadir imagen como capa",
+    "clone": "Clonar {{name}}",
     "delete": "Eliminar {{name}}",
     "edit": "Editar {{name}}",
     "empty": "No hay capas en esta página.",
@@ -503,8 +505,9 @@
     "brushSizePixels": "Tamaño del pincel: {{size}} píxeles",
     "brushSizeShort": "{{size}} px",
     "color_picker": "Selector de color",
-    "detection": "Detección manual",
-    "detectionOverlap": "La zona no puede tocar ni superponerse a otra zona de detección.",
+    "detection": "Detección manual de texto/bubble",
+    "detectionOverlap": "Una detección no puede tocar ni superponerse a otra detección de texto o bubble.",
+    "detectionOutside": "Dibuja la detección dentro de una sección.",
     "detectionTooSmall": "Dibuja una zona con al menos tres puntos.",
     "detectionInvalid": "El contorno debe ser una forma cerrada y simple, sin cruces.",
     "decreaseBrushSize": "Reducir tamaño del pincel",
@@ -513,6 +516,8 @@
     "increaseBrushSize": "Aumentar tamaño del pincel",
     "pan": "Desplazar",
     "remove": "Eliminar",
+    "section": "Sección manual",
+    "sectionOverlap": "Una sección no puede tocar ni superponerse a otra sección.",
     "select": "Seleccionar",
     "text": "Texto"
   },

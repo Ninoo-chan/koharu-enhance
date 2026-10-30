@@ -214,6 +214,8 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "addImage": "Add image as layer",
+    "clone": "Clone {{name}}",
     "delete": "Delete {{name}}",
     "edit": "Edit {{name}}",
     "empty": "No layers on this page.",
@@ -503,8 +505,9 @@
     "brushSizePixels": "Brush size: {{size}} pixels",
     "brushSizeShort": "{{size}} px",
     "color_picker": "Color picker",
-    "detection": "Manual detection",
-    "detectionOverlap": "A region cannot touch or overlap another detection region.",
+    "detection": "Manual text/bubble detection",
+    "detectionOverlap": "A detection cannot touch or overlap another text or bubble detection.",
+    "detectionOutside": "Draw the detection inside a section.",
     "detectionTooSmall": "Draw a region with at least three points.",
     "detectionInvalid": "The outline must be a closed simple shape without crossings.",
     "decreaseBrushSize": "Decrease brush size",
@@ -513,6 +516,8 @@
     "increaseBrushSize": "Increase brush size",
     "pan": "Pan",
     "remove": "Remove",
+    "section": "Manual section",
+    "sectionOverlap": "A section cannot touch or overlap another section.",
     "select": "Select",
     "text": "Text"
   },

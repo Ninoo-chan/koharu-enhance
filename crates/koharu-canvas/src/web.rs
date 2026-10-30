@@ -810,7 +810,25 @@ impl CanvasState {
         let mut commands = Vec::new();
         let mut vectors = Scene::new();
         let mut vectors_pending = false;
+        // A paint stroke is committed into a raster layer that sits below the text (the target
+        // layer, or a new layer inserted before the text group). Its live preview is therefore
+        // drawn at that same depth so it never appears over text and then jumps behind it when
+        // the stroke finishes. Inpaint masks stay on top because they only mark a region.
+        let paint = self
+            .stroke
+            .as_ref()
+            .filter(|stroke| stroke.kind == StrokeKind::Paint);
+        let mut paint_placed = false;
         for layer in frame.layers() {
+            if let Some(stroke) = paint
+                && !paint_placed
+                && stroke.layer.is_none()
+                && layer.kind() == LayerKind::Text
+            {
+                append_stroke_preview(&mut vectors, stroke, page_rect);
+                vectors_pending = true;
+                paint_placed = true;
+            }
             let transform = normalize
                 * self
                     .transform
@@ -850,30 +868,25 @@ impl CanvasState {
                     && presentation.opacity.is_finite()
                     && presentation.opacity > 0.0;
             }
+            if let Some(stroke) = paint
+                && !paint_placed
+                && stroke.layer == Some(layer.id())
+            {
+                append_stroke_preview(&mut vectors, stroke, page_rect);
+                vectors_pending = true;
+                paint_placed = true;
+            }
+        }
+        if let Some(stroke) = paint.filter(|_| !paint_placed) {
+            append_stroke_preview(&mut vectors, stroke, page_rect);
+            vectors_pending = true;
         }
         if let Some(stroke) = self
             .stroke
             .as_ref()
-            .filter(|stroke| stroke.kind != StrokeKind::Erase)
+            .filter(|stroke| stroke.kind == StrokeKind::Inpaint)
         {
-            let opacity = match stroke.kind {
-                StrokeKind::Paint => f32::from(stroke.color[3]) / 255.0,
-                StrokeKind::Inpaint => 116.0 / 255.0,
-                StrokeKind::Erase => 1.0,
-            };
-            if opacity < 1.0 {
-                vectors.push_layer(
-                    Fill::NonZero,
-                    Mix::Normal,
-                    opacity,
-                    Affine::IDENTITY,
-                    &page_rect,
-                );
-            }
-            vectors.append(&stroke.preview, None);
-            if opacity < 1.0 {
-                vectors.pop_layer();
-            }
+            append_stroke_preview(&mut vectors, stroke, page_rect);
             vectors_pending = true;
         }
         flush_vectors(
@@ -890,6 +903,28 @@ impl CanvasState {
                 .map(|stroke| viewport_scene(&stroke.preview, camera, page_rect, viewport_rect)),
             clip: page_clip(self.camera, page_size, self.size),
         }
+    }
+}
+
+/// Draws a stroke preview at the current depth of `vectors`, honoring the brush opacity.
+fn append_stroke_preview(vectors: &mut Scene, stroke: &StrokeEdit, page_rect: Rect) {
+    let opacity = match stroke.kind {
+        StrokeKind::Paint => f32::from(stroke.color[3]) / 255.0,
+        StrokeKind::Inpaint => 116.0 / 255.0,
+        StrokeKind::Erase => 1.0,
+    };
+    if opacity < 1.0 {
+        vectors.push_layer(
+            Fill::NonZero,
+            Mix::Normal,
+            opacity,
+            Affine::IDENTITY,
+            &page_rect,
+        );
+    }
+    vectors.append(&stroke.preview, None);
+    if opacity < 1.0 {
+        vectors.pop_layer();
     }
 }
 

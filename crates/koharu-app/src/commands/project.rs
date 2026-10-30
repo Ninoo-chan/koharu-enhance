@@ -1039,6 +1039,57 @@ impl Project {
         ))
     }
 
+    /// Adds a user-supplied picture as a full-page paint layer directly above the page source and
+    /// below every other layer, so strokes and cleanup keep drawing over it. Hiding or deleting
+    /// the layer restores the original illustration.
+    pub(crate) async fn add_image_layer(
+        &mut self,
+        page: EntityId,
+        name: &str,
+        image: RgbaImage,
+    ) -> Result<(Commit, EntityId)> {
+        let snapshot = self.snapshot();
+        let page_value = snapshot.page(page)?.page()?;
+        let width = page_value.width.round() as u32;
+        let height = page_value.height.round() as u32;
+        if image.dimensions() != (width, height) {
+            bail!("the image layer must match the page dimensions");
+        }
+        let mut bytes = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(image).write_to(&mut bytes, ImageFormat::Png)?;
+        let source = AssetRole::new("source")?;
+        let mut layer = None;
+        let patch = snapshot.patch(|edit| {
+            let added = edit.add_entity(page, At::Start)?;
+            edit.set(
+                added,
+                &SceneRasterLayer {
+                    origin: Origin::User,
+                    name: name.to_owned(),
+                    kind: RasterLayerKind::Paint,
+                },
+            )?;
+            layer = Some(added);
+            edit.set_asset(
+                added,
+                &source,
+                AssetInput::new(
+                    bytes.into_inner(),
+                    "image/png",
+                    AssetMetadata {
+                        width: Some(width),
+                        height: Some(height),
+                        attributes: Default::default(),
+                    },
+                ),
+            )
+        })?;
+        Ok((
+            self.commit(patch).await?,
+            layer.expect("image layer was added while building the patch"),
+        ))
+    }
+
     pub(crate) async fn undo(&mut self) -> Result<Commit> {
         let revisions = self.undo.pop().ok_or_else(|| anyhow!("nothing to undo"))?;
         let commit = match self.session.undo_many(revisions.iter().copied()).await {
