@@ -57,7 +57,11 @@ export function CommitTextarea({ value, delay = 360, onCommit, ...props }: Commi
         setDraft(next)
         schedule(next)
       }}
-      onBlur={() => commit(draft)}
+      onBlur={() => {
+        // A composition that never reported its end must not leave the field uncommittable.
+        composing.current = false
+        commit(draft)
+      }}
     />
   )
 }

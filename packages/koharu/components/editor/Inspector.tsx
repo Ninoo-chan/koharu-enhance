@@ -32,7 +32,7 @@ import { useTranslation } from 'react-i18next'
 import { ColorWell } from '@/components/controls/ColorWell'
 import { CommitTextarea } from '@/components/controls/CommitTextarea'
 import { FontPicker } from '@/components/controls/FontPicker'
-import { call } from '@/lib/backend'
+import { call, withTimeout } from '@/lib/backend'
 import {
   expandLayerSelection,
   isGroupLayer,
@@ -165,9 +165,11 @@ function TypeInspector() {
       while (queued.current) {
         const updates = queued.current
         queued.current = null
-        await call(commands.setTypography, updates)
-          .then(() => refresh(projectKey, pageKey))
-          .catch(() => undefined)
+        // Bounded so a request that never answers cannot keep the queue closed forever.
+        await withTimeout(
+          call(commands.setTypography, updates).then(() => refresh(projectKey, pageKey)),
+          TYPOGRAPHY_TIMEOUT_MS,
+        ).catch(() => undefined)
       }
     } finally {
       inFlight.current = false
@@ -1103,6 +1105,7 @@ function InspectorField({ label, children }: { label: string; children: React.Re
   )
 }
 
+const TYPOGRAPHY_TIMEOUT_MS = 15_000
 const fontSizePresets = [8, 9, 10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64, 72, 96]
 // Slider span; the number field still accepts anything from 0.5 to 300.
 const fontSizeSliderRange = [6, 120] as const
@@ -1123,16 +1126,12 @@ function FontSizeField({
   const { t } = useTranslation()
   const id = useId()
   const [draft, setDraft] = useState<number | null>(value)
-  // While the slider is being dragged the field follows the thumb, not the (older) saved size
-  // that a finished render reports back.
-  const dragging = useRef(false)
 
   useEffect(() => {
-    if (!dragging.current) setDraft(autoFit ? null : value)
+    setDraft(autoFit ? null : value)
   }, [autoFit, value])
 
   const slide = (next: number) => {
-    dragging.current = true
     setDraft(next)
     onChange(next)
   }
@@ -1221,9 +1220,6 @@ function FontSizeField({
         value={Math.min(Math.max(draft ?? value, fontSizeSliderRange[0]), fontSizeSliderRange[1])}
         className='min-w-0 flex-1 [&_[data-slot=slider-thumb]]:size-2.5'
         onValueChange={slide}
-        onValueCommitted={() => {
-          dragging.current = false
-        }}
       />
     </div>
   )

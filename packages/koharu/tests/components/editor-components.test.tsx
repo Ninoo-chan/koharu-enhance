@@ -736,6 +736,29 @@ describe('greenfield editor', () => {
     )
   })
 
+  it('keeps accepting typography changes after a request never answers', async () => {
+    installProject()
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      const setTypography = vi
+        .spyOn(commands, 'setTypography')
+        .mockImplementationOnce(() => new Promise(() => undefined))
+        .mockResolvedValue(null)
+      render(<Inspector />)
+
+      await user.click(screen.getByRole('button', { name: 'Font weight' }))
+      await waitFor(() => expect(setTypography).toHaveBeenCalledTimes(1))
+      await user.click(screen.getByRole('button', { name: 'Font style' }))
+      await vi.advanceTimersByTimeAsync(16_000)
+      await waitFor(() => expect(setTypography).toHaveBeenCalledTimes(2))
+      await user.click(screen.getByRole('button', { name: 'Font weight' }))
+      await waitFor(() => expect(setTypography).toHaveBeenCalledTimes(3))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('adjusts brush size from the toolbar popover', async () => {
     const user = userEvent.setup()
     installProject()

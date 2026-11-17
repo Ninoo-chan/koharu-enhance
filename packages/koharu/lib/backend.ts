@@ -28,6 +28,16 @@ export async function call<Args extends unknown[], Result>(
   }
 }
 
+export function withTimeout<Result>(promise: Promise<Result>, ms: number): Promise<Result> {
+  return new Promise<Result>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('The request timed out.')), ms)
+    promise.then(
+      (value) => (clearTimeout(timer), resolve(value)),
+      (error) => (clearTimeout(timer), reject(error)),
+    )
+  })
+}
+
 export function dispatch<Args extends unknown[], Result>(
   command: Command<Args, Result>,
   ...args: Args
